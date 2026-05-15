@@ -1,0 +1,14 @@
+{
+  "symptoms": [
+    {
+      "src": "crashdata",
+      "type": "output",
+      "value": "/(SIGABRT|Sanitizer: ABRT)/"
+    },
+    {
+      "src": "stderr",
+      "type": "output",
+      "value": "/hanging at shutdown; attempting crash report \\(fatal error\\)/"
+    }
+  ]
+}
