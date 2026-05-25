@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -59,6 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      released: ${{ steps.release.outputs.released }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,6 +88,7 @@ jobs:
           private-key: ${{ secrets.UPDATE_BOT_PRIVATE_KEY }}
 
       - name: Run semantic-release
+        id: release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -92,8 +96,34 @@ jobs:
           git config --global user.name "semantic-release"
           uv run semantic-release version
           uv run semantic-release publish
+          if [ -d dist ] && [ -n "$(ls -A dist 2>/dev/null)" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Publish package distributions to PyPI
+      - name: Store build artifacts
+        if: steps.release.outputs.released == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  pypi:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
