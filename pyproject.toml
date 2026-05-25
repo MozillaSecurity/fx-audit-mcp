@@ -1,6 +1,6 @@
 [project]
 name = "fx-audit-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Firefox security audit MCP tools"
 readme = "README.md"
 requires-python = ">=3.12"
