@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import pytest
 from bugsy import BugsyException
 from fastmcp.exceptions import ToolError
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from fx_audit_mcp.bugzilla import (
+    _log_transient_failure,
     _raise_bugsy_error,
     build_server,
     main,
@@ -238,6 +243,100 @@ class TestGetBugAttachments:
             await build_server(client).call_tool("get_bug_attachments", {"bug_id": 1})
 
 
+class TestLogTransientFailure:
+    @staticmethod
+    def _make_response(
+        mocker: MockerFixture,
+        status_code: int,
+        url: str = "https://example.test/rest/bug",
+        headers: dict[str, str] | None = None,
+        text: str = "",
+        elapsed_seconds: float = 0.0,
+    ) -> MagicMock:
+        response: MagicMock = mocker.MagicMock()
+        response.status_code = status_code
+        response.url = url
+        response.headers = headers or {}
+        response.text = text
+        response.elapsed = timedelta(seconds=elapsed_seconds)
+        return response
+
+    @pytest.mark.parametrize("status", [200, 301, 404, 499])
+    def test_non_5xx_does_not_log(
+        self,
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+        status: int,
+    ) -> None:
+        response = self._make_response(mocker, status)
+        with caplog.at_level(logging.WARNING, logger="fx_audit_mcp.bugzilla"):
+            result = _log_transient_failure(response)
+        assert result is response
+        assert caplog.records == []
+
+    @pytest.mark.parametrize(
+        "key_param",
+        ["Bugzilla_api_key", "bugzilla_api_key"],
+    )
+    def test_redacts_api_key_in_url(
+        self,
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+        key_param: str,
+    ) -> None:
+        response = self._make_response(
+            mocker,
+            502,
+            url=f"https://example.test/rest/bug?{key_param}=SECRETKEY&id=1",
+            text="upstream request timeout",
+            elapsed_seconds=1.5,
+        )
+        with caplog.at_level(logging.WARNING, logger="fx_audit_mcp.bugzilla"):
+            _log_transient_failure(response)
+        assert len(caplog.records) == 1
+        message = caplog.records[0].getMessage()
+        assert "SECRETKEY" not in message
+        assert f"{key_param}=REDACTED" in message
+        assert "id=1" in message
+
+    def test_logs_diagnostic_headers_only(
+        self,
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        response = self._make_response(
+            mocker,
+            504,
+            headers={
+                "Server": "heroku",
+                "Via": "1.1 vegur",
+                "X-Heroku-Queue-Wait-Time": "42",
+                "Content-Type": "text/plain",
+                "Set-Cookie": "session=secret",
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="fx_audit_mcp.bugzilla"):
+            _log_transient_failure(response)
+        message = caplog.records[0].getMessage()
+        assert "Server" in message
+        assert "Via" in message
+        assert "X-Heroku-Queue-Wait-Time" in message
+        assert "Content-Type" not in message
+        assert "Set-Cookie" not in message
+
+    def test_truncates_long_body(
+        self,
+        mocker: MockerFixture,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        response = self._make_response(mocker, 503, text="x" * 1000)
+        with caplog.at_level(logging.WARNING, logger="fx_audit_mcp.bugzilla"):
+            _log_transient_failure(response)
+        message = caplog.records[0].getMessage()
+        assert "x" * 200 in message
+        assert "x" * 201 not in message
+
+
 class TestMain:
     def test_missing_api_key_exits_nonzero(
         self,
@@ -268,6 +367,33 @@ class TestMain:
         )
         build_server_mock.assert_called_once_with(bugsy_ctor.return_value)
         fake_server.run.assert_called_once_with(transport="stdio", show_banner=False)
+
+    def test_main_mounts_retry_adapter_and_response_hook(
+        self,
+        mocker: MockerFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("BUGZILLA_API_KEY", "secret")
+        bugsy_ctor: MagicMock = mocker.patch("fx_audit_mcp.bugzilla.bugsy.Bugsy")
+        client = bugsy_ctor.return_value
+        client.session.hooks = {"response": []}
+        mocker.patch("fx_audit_mcp.bugzilla.build_server")
+        main()
+        schemes = [c.args[0] for c in client.session.mount.call_args_list]
+        assert schemes == ["http://", "https://"]
+        adapters = {c.args[0]: c.args[1] for c in client.session.mount.call_args_list}
+        assert adapters["http://"] is adapters["https://"]
+        adapter = adapters["https://"]
+        assert isinstance(adapter, HTTPAdapter)
+        retry = adapter.max_retries
+        assert isinstance(retry, Retry)
+        assert retry.total == 5
+        assert retry.backoff_factor == 2
+        assert set(retry.status_forcelist or ()) == {429, 500, 502, 503, 504}
+        assert retry.allowed_methods == frozenset({"GET"})
+        assert retry.raise_on_status is False
+        assert retry.respect_retry_after_header is True
+        assert _log_transient_failure in client.session.hooks["response"]
 
     def test_keyboard_interrupt_exits_zero(
         self,

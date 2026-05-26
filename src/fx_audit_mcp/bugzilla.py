@@ -7,13 +7,17 @@ Mozilla instance) from the environment.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sys
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import bugsy
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .models import (
     BugzillaAttachmentsResult,
@@ -22,12 +26,55 @@ from .models import (
     BugzillaSearchResult,
 )
 
+if TYPE_CHECKING:
+    import requests
+
 DEFAULT_INCLUDE_FIELDS = (
     "id,summary,status,resolution,product,component,priority,"
     "severity,keywords,whiteboard,assigned_to,creator,"
     "creation_time,last_change_time,blocks,depends_on,see_also,"
     "cf_crash_signature,url,version,op_sys,platform"
 )
+
+logger = logging.getLogger("fx_audit_mcp.bugzilla")
+
+_API_KEY_QUERY_RE = re.compile(r"(Bugzilla_api_key=)[^&]*", re.IGNORECASE)
+
+_DIAG_HEADERS = (
+    "Server",
+    "Via",
+    "X-Heroku-Queue-Wait-Time",
+    "X-Bugzilla-Run",
+    "Cache-Status",
+    "CF-Ray",
+    "Age",
+)
+
+
+def _log_transient_failure(
+    response: requests.Response, *_args: object, **_kwargs: object
+) -> requests.Response:
+    """Session hook: emit timing + headers + body on any 5xx response.
+
+    Bugsy raises a generic BugsyException on 5xx that swallows the URL,
+    timing, and gateway headers. This hook logs them on the way through so a
+    captured stderr log is enough to reconstruct the failing call. The API
+    key (which bugsy puts in the URL for Bugzilla 5.0 compat) is redacted
+    before logging.
+    """
+    if response.status_code < 500:
+        return response
+    safe_url = _API_KEY_QUERY_RE.sub(r"\1REDACTED", response.url)
+    headers = {k: response.headers[k] for k in _DIAG_HEADERS if k in response.headers}
+    logger.warning(
+        "bugzilla %d in %.2fs url=%s headers=%s body=%s",
+        response.status_code,
+        response.elapsed.total_seconds(),
+        safe_url,
+        headers,
+        response.text[:200],
+    )
+    return response
 
 
 def _raise_bugsy_error(e: bugsy.BugsyException) -> NoReturn:
@@ -221,7 +268,24 @@ def main() -> None:
         print("BUGZILLA_API_KEY env var is required", file=sys.stderr)
         sys.exit(1)
     bz_url = os.environ.get("BUGZILLA_URL", "https://bugzilla.mozilla.org/rest")
-    server = build_server(bugsy.Bugsy(api_key=api_key, bugzilla_url=bz_url))
+    client = bugsy.Bugsy(api_key=api_key, bugzilla_url=bz_url)
+    # Retry transient 5xx / 429 on GET-only requests. fx-audit-mcp is
+    # read-only -- every tool issues GET -- so blind retries are safe (no risk
+    # of duplicate writes). Do not widen allowed_methods without adding
+    # idempotency checks at each call site.
+    retry = Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        raise_on_status=False,
+        respect_retry_after_header=True,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    client.session.mount("http://", adapter)
+    client.session.mount("https://", adapter)
+    client.session.hooks["response"].append(_log_transient_failure)
+    server = build_server(client)
     try:
         server.run(transport="stdio", show_banner=False)
     except KeyboardInterrupt:
