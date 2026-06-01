@@ -17,7 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "bugsy",
     "fastmcp>=3.0.0",
     "fuzzmanager>=0.9.1",
     "grizzly-framework>=1.0.0",
@@ -41,7 +40,6 @@ dev = [
 
 [project.scripts]
 fx-audit-mcp = "fx_audit_mcp.mcp_server:main"
-fx-audit-bugzilla-mcp = "fx_audit_mcp.bugzilla:main"
 fx-audit-build-firefox = "fx_audit_mcp.build_firefox:main"
 
 [project.urls]
@@ -55,9 +53,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fx_audit_mcp"]
-
-[tool.uv.sources]
-bugsy = { git = "https://github.com/MozillaSecurity/Bugsy.git" }
 
 [tool.coverage.run]
 source = ["fx_audit_mcp"]
@@ -85,7 +80,7 @@ strict = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["FTB.*", "bugsy"]
+module = ["FTB.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
