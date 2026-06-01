@@ -189,5 +189,5 @@ disable = [
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
-build_command = "uv build"
+build_command = "uv lock && git add uv.lock && uv build"
 major_on_zero = false
