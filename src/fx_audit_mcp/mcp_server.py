@@ -3,8 +3,6 @@
 Serves browser_evaluator, package_testcase, js_shell_evaluator,
 build_firefox, build_nss, and nss_gtest_evaluator over stdio.
 
-Bugzilla tools have a separate entry point: ``fx-audit-bugzilla-mcp``.
-
 Configuration is via environment variables:
   FIREFOX_SOURCE_ROOT  — default Firefox source directory for build tools
   FIREFOX_BINARY       — path to Firefox binary; used to derive build_dir

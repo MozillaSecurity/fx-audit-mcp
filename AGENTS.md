@@ -2,7 +2,7 @@
 
 Firefox security audit MCP tools. Provides async Python functions and a FastMCP
 server for running testcases in Firefox and SpiderMonkey, building Firefox/NSS
-with ASAN, and querying Bugzilla.
+with ASAN.
 
 ## Project Structure
 
@@ -15,13 +15,11 @@ src/fx_audit_mcp/          # Main package
   nss_gtest_evaluator.py       # Run NSS GTest under ASAN
   build_firefox.py             # Build Firefox with mach build
   build_nss.py                 # Build NSS with ASAN
-  bugzilla.py                  # FastMCP server wrapping bugsy for Bugzilla REST
   ignored_signatures/          # FuzzManager crash signatures to suppress
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
   conftest.py
   test_browser_evaluator.py
-  test_bugzilla.py
   test_build_firefox.py
   test_build_nss.py
   test_js_shell_evaluator.py
@@ -36,25 +34,20 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   `Annotated[T, Field(...)]` on tool parameters.
 - All tools return **Pydantic BaseModel** instances defined in `models.py`.
   Exceptions are allowed to bubble (FastMCP surfaces them as `isError=True`):
-  tools raise `FileNotFoundError` for missing binaries, `ToolError` for
-  Bugzilla-side failures, etc. Do not wrap tool bodies in catch-all
-  `try/except Exception` blocks.
+  tools raise `FileNotFoundError` for missing binaries, etc.
+  Do not wrap tool bodies in catch-all `try/except Exception` blocks.
 - Crash detection via sanitizer output is always on stderr; logs are
   tail-truncated to `MAX_LOG_SIZE` (1 MiB) to avoid overwhelming LLM context.
 - `browser_evaluator` loads `ignored_signatures/*.json` (FuzzManager format) at
   call time to suppress common noise crashes (e.g. shutdown hangs).
 - The execution tools (browser/JS shell/NSS gtest/Firefox/NSS build) are also
-  exported from `fx_audit_mcp` for direct use (e.g. as pydantic-ai tools). The
-  Bugzilla tools are **only** available via `fx-audit-bugzilla-mcp` (the
-  closures inside `build_server` bind the `bugsy.Bugsy` client from closure;
-  there is no top-level Python API for them).
+  exported from `fx_audit_mcp` for direct use (e.g. as pydantic-ai tools).
 - Don't introduce thin private wrappers around a public function (or vice
   versa) when one call site does all the work — inline.
 
 ## Entry Points
 
 - `fx-audit-mcp` → `fx_audit_mcp.mcp_server:main` (main MCP server: browser/JS shell/NSS/build tools)
-- `fx-audit-bugzilla-mcp` → `fx_audit_mcp.bugzilla:main` (Bugzilla query tools, separate server)
 - `fx-audit-build-firefox` → `fx_audit_mcp.build_firefox:main` (CLI for building Firefox)
 
 ## Development
