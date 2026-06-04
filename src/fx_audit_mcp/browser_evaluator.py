@@ -306,6 +306,9 @@ async def browser_evaluator(  # pragma: no cover
     # Enable verbose logging
     target.environ["MOZ_LOG"] = "console:5,PageMessages:5"
 
+    # Minimize log spam from mesa
+    target.environ["EGL_LOG_LEVEL"] = "fatal"
+
     # Always generate prefs.js from prefpicker template with hardcoded
     # baseline prefs, plus any user-supplied custom prefs on top.
     # These are set on the target profile (not the testcase) so they
