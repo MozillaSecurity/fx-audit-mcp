@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.2 (2026-06-04)
+
+### Bug Fixes
+
+- Reduce log output from mesa
+  ([`d1ce48e`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/d1ce48e8fc2cc92550b2401a5725cce05cd73e0d))
+
+
 ## v1.0.1 (2026-05-25)
 
 ### Bug Fixes
