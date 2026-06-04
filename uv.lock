@@ -157,10 +157,14 @@ wheels = [
 
 [[package]]
 name = "bugsy"
-version = "0.13.0"
-source = { git = "https://github.com/MozillaSecurity/Bugsy.git#4a7d29db0952704886f9e266a3986b0aa4a6abc3" }
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e5/d0/610e2f68f515238f98f920d9fe0a9b4bbc56436e6cfc64c5b64dc20b1459/bugsy-0.12.0.tar.gz", hash = "sha256:2d49af1cb4a2841e3d677ac535b054c51f457a5d124ad106c43a8fc3847fb26e", size = 17841, upload-time = "2020-07-13T18:47:24.272Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/e6/a99aa6ab1ae7842011ca6d50d159a5e5a500717d13fc2ae42f39131741e3/bugsy-0.12.0-py2.py3-none-any.whl", hash = "sha256:b5df82ff0e708cca73a517bfa80494a43b1b97267d5778a5cba62f7a9d04e9da", size = 27223, upload-time = "2020-07-13T18:47:23.232Z" },
 ]
 
 [[package]]
@@ -750,10 +754,9 @@ wheels = [
 
 [[package]]
 name = "fx-audit-mcp"
-version = "1.0.2"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "bugsy" },
     { name = "fastmcp" },
     { name = "fuzzmanager" },
     { name = "grizzly-framework" },
@@ -777,7 +780,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bugsy", git = "https://github.com/MozillaSecurity/Bugsy.git" },
     { name = "fastmcp", specifier = ">=3.0.0" },
     { name = "fuzzmanager", specifier = ">=0.9.1" },
     { name = "grizzly-framework", specifier = ">=1.0.0" },
