@@ -33,16 +33,31 @@ getLogger("sapphire").setLevel(ERROR)
 # Baseline prefs written to every profile launched by browser_evaluator.
 # Quiets log spam and prevents network calls that slow down or noise up runs.
 _BASELINE_PREFS: dict[str, str | int | bool] = {
+    # Disable Experiments / Normandy
+    "app.normandy.enabled": False,
+    "app.shield.optoutstudies.enabled": False,
+    # Disable application updates
+    "app.update.disabledForTesting": True,
     # Disable BackupService (errors about Documents directory)
     "browser.backup.enabled": False,
     # Prevent activity stream feeds from initializing (CDN errors)
+    "browser.newtabpage.enabled": False,
     "browser.newtabpage.activity-stream.testing.shouldInitializeFeeds": False,
     # Disable region detection network fetch
     "browser.region.network.url": "",
     "browser.region.update.enabled": False,
+    # Disable safe browsing list updates
+    "browser.safebrowsing.downloads.enabled": False,
+    # Disable translations (downloads Bergamot ML language models over the network)
+    "browser.translations.enable": False,
     # Disable Merino/URLBar suggestion fetches
+    "browser.urlbar.merino.enabled": False,
     "browser.urlbar.merino.endpointURL": "",
     "browser.urlbar.quicksuggest.enabled": False,
+    # Select theme to prevent log spam
+    "extensions.activeThemeID": "default-theme@mozilla.org",
+    "browser.theme.content-theme": 2,
+    "browser.theme.toolbar-theme": 2,
     # Disable system addon and addon repository updates
     "extensions.blocklist.enabled": False,
     # Disable built-in WebExtensions to avoid "context not found" spam
@@ -53,12 +68,28 @@ _BASELINE_PREFS: dict[str, str | int | bool] = {
     "extensions.systemAddon.update.enabled": False,
     "extensions.update.enabled": False,
     "extensions.webcompat.enabled": False,
+    # Disable Firefox Accounts
+    "identity.fxaccounts.enabled": False,
+    # Disable health report
+    "datareporting.healthreport.service.enabled": False,
+    # Disable Geolocation
+    "geo.enabled": False,
     # Disable GMP plugin downloads (OpenH264, Widevine)
     "media.gmp-manager.updateEnabled": False,
     # Quiet remote settings logging and prevent network hits
     "messaging-system.log": "off",
+    # Disable captive portal / connectivity network probes
+    "network.captive-portal-service.enabled": False,
+    "network.connectivity-service.enabled": False,
+    # Disable tracking-list updates
+    "privacy.trackingprotection.enabled": False,
+    # Disable Remote Settings
     "services.settings.loglevel": "off",
     "services.settings.server": "data:,#remote-settings-dummy/v1",
+    # Disable Sync addons
+    "services.sync.engine.addons": False,
+    # Disable telemetry
+    "toolkit.telemetry.enabled": False,
 }
 
 
