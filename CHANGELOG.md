@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-06-12)
+
+### Bug Fixes
+
+- Update prefs to disable unneeded functionality
+  ([`b34078b`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/b34078b21583de926811348f7ba889ff5d4faaac))
+
+### Chores
+
+- Update grizzly version
+  ([`85f88d6`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/85f88d6d7fcbf5373abd36d414eba0aae46b62c6))
+
+
 ## v1.1.0 (2026-06-04)
 
 ### Chores
