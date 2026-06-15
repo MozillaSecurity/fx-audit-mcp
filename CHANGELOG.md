@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-06-15)
+
+### Bug Fixes
+
+- Disable Nimbus via pref to reduce spam
+  ([`c2b814d`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/c2b814d0e1e7f2ba559da330a24d056d1f584a58))
+
+- Remove invalid pref
+  ([`e84c7f6`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e84c7f671bf660e1efe51c88b97541aae58198bb))
+
+
 ## v1.1.1 (2026-06-12)
 
 ### Bug Fixes
