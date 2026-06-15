@@ -51,7 +51,6 @@ _BASELINE_PREFS: dict[str, str | int | bool] = {
     # Disable translations (downloads Bergamot ML language models over the network)
     "browser.translations.enable": False,
     # Disable Merino/URLBar suggestion fetches
-    "browser.urlbar.merino.enabled": False,
     "browser.urlbar.merino.endpointURL": "",
     "browser.urlbar.quicksuggest.enabled": False,
     # Select theme to prevent log spam
