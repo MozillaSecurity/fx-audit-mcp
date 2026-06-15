@@ -59,13 +59,13 @@ _BASELINE_PREFS: dict[str, str | int | bool] = {
     "browser.theme.toolbar-theme": 2,
     # Disable system addon and addon repository updates
     "extensions.blocklist.enabled": False,
+    "extensions.systemAddon.update.enabled": False,
+    "extensions.update.enabled": False,
     # Disable built-in WebExtensions to avoid "context not found" spam
     "extensions.formautofill.addresses.enabled": False,
     "extensions.formautofill.creditCards.enabled": False,
     "extensions.getAddons.cache.enabled": False,
     "extensions.installDistroAddons": False,
-    "extensions.systemAddon.update.enabled": False,
-    "extensions.update.enabled": False,
     "extensions.webcompat.enabled": False,
     # Disable Firefox Accounts
     "identity.fxaccounts.enabled": False,
@@ -80,6 +80,8 @@ _BASELINE_PREFS: dict[str, str | int | bool] = {
     # Disable captive portal / connectivity network probes
     "network.captive-portal-service.enabled": False,
     "network.connectivity-service.enabled": False,
+    # Disable Nimbus
+    "nimbus.rollouts.enabled": False,
     # Disable tracking-list updates
     "privacy.trackingprotection.enabled": False,
     # Disable Remote Settings
