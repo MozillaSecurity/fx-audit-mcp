@@ -5,10 +5,14 @@ from __future__ import annotations
 import re
 import sys
 import tempfile
+import threading
+from contextlib import suppress
+from functools import partial
 from logging import ERROR, getLogger
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import psutil
 from FTB.Signatures.CrashSignature import CrashSignature
 from grizzly.common.storage import TestCase
 from grizzly.replay.replay import ReplayManager
@@ -20,10 +24,27 @@ from sapphire import Sapphire
 from .models import BrowserCrashInfo, Logs
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from grizzly.common.report import Report
 
 MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
+
+# Firefox child process-type token (trailing cmdline arg of a "-contentproc"
+# process) -> the BrowserCrashInfo field that flags a crash in that process.
+# The parent process has no "-contentproc" arg and is matched by PID instead.
+_PROCESS_TYPE_FIELDS: dict[str, str] = {
+    "tab": "crashed_content",
+    "gpu": "crashed_gpu",
+    "rdd": "crashed_rdd",
+    "gmplugin": "crashed_gmp",
+    "socket": "crashed_socket",
+    "utility": "crashed_utility",
+}
+
+# Every per-process crash flag on BrowserCrashInfo, parent first.
+_ALL_CRASH_FIELDS: tuple[str, ...] = ("crashed_parent", *_PROCESS_TYPE_FIELDS.values())
 
 # Suppress grizzly's verbose logging (but allow CRITICAL and ERROR)
 getLogger("grizzly").setLevel(ERROR)
@@ -118,6 +139,100 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
             self.parent_pid = self._puppet.get_pid()
 
 
+class _ProcessTreeSampler:
+    """Accumulate a ``{pid: process_type}`` map from a live Firefox tree.
+
+    Child processes (content/GPU/RDD/...) spawn during a run and are gone by
+    the time the crash report is read, and ASAN builds write no minidump
+    ``ProcessType`` annotation. So a background thread periodically walks the
+    live tree and records each child's type from its command line. A crashing
+    process was alive on earlier ticks, so accumulating (never evicting) lets
+    us classify it even if the final sample is missed.
+    """
+
+    def __init__(
+        self,
+        list_procs: Callable[[], Iterable[tuple[int, list[str]]]],
+        interval: float = 0.1,
+    ) -> None:
+        self._list_procs = list_procs
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._pid_types: dict[int, str] = {}
+
+    def _run(self) -> None:  # pragma: no cover
+        while not self._stop.is_set():
+            _record_process_types(self._pid_types, self._list_procs())
+            self._stop.wait(self._interval)
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    @property
+    def pid_types(self) -> dict[int, str]:
+        """A snapshot copy of the accumulated ``{pid: process_type}`` map."""
+        return dict(self._pid_types)
+
+
+def _list_target_processes(
+    target: _FxAuditFirefoxTarget,
+) -> Iterable[tuple[int, list[str]]]:
+    """Yield ``(pid, cmdline)`` for the target's parent and its descendants.
+
+    Yields nothing until the browser has launched (``parent_pid`` is set).
+    Processes that vanish mid-walk are skipped.
+    """
+    parent_pid = target.parent_pid
+    if parent_pid is None:
+        return
+    try:
+        parent = psutil.Process(parent_pid)
+        procs = [parent, *parent.children(recursive=True)]
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return
+    for proc in procs:
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            yield proc.pid, proc.cmdline()
+
+
+def _record_process_types(
+    pid_types: dict[int, str],
+    procs: Iterable[tuple[int, list[str]]],
+) -> None:
+    """Record the process type of every child in *procs* into *pid_types*.
+
+    Entries accumulate and are never evicted, so a process that has since left
+    the tree stays classified.
+    """
+    for pid, cmdline in procs:
+        process_type = _cmdline_process_type(cmdline)
+        if process_type is not None:
+            pid_types[pid] = process_type
+
+
+def _cmdline_process_type(cmdline: list[str]) -> str | None:
+    """Return the Firefox child process type token from a command line.
+
+    Child processes carry a ``-contentproc`` arg and the process-type token
+    (e.g. ``tab``, ``gpu``, ``rdd``) as the trailing argument. The token is
+    validated against the known set rather than trusting position blindly.
+    Returns None for the parent process or any unrecognized child.
+    """
+    if "-contentproc" not in cmdline:
+        return None
+    for token in reversed(cmdline):
+        if token in _PROCESS_TYPE_FIELDS:
+            return token
+    return None
+
+
 def _extract_crash_pid(crashdata: str) -> int | None:
     """Extract the crashing process PID from ASAN output.
 
@@ -134,10 +249,38 @@ def _extract_crash_pid(crashdata: str) -> int | None:
     return None
 
 
-def _crashed_parent(parent_pid: int | None, crashdata: str) -> bool:
-    """Return True when the ASAN crashdata PID matches the known parent PID."""
+def _classify_crash(
+    parent_pid: int | None,
+    pid_types: dict[int, str],
+    crashdata: str,
+) -> dict[str, bool]:
+    """Map the ASAN crash PID to the per-process crash flags.
+
+    A crash happens in exactly one process, so at most one returned flag is
+    True. When the crashing PID can't be determined (no ASAN marker) or its
+    process type was never sampled, every flag is False: the crash is real but
+    we can't attribute it to a process.
+
+    Args:
+        parent_pid: PID of the Firefox parent process, if known.
+        pid_types: Accumulated ``{pid: process_type}`` map from the run.
+        crashdata: ASAN crash output.
+
+    Returns:
+        Mapping of every BrowserCrashInfo per-process flag to a bool.
+    """
+    result = dict.fromkeys(_ALL_CRASH_FIELDS, False)
     crash_pid = _extract_crash_pid(crashdata)
-    return parent_pid is not None and crash_pid is not None and crash_pid == parent_pid
+    if crash_pid is None:
+        return result
+    if parent_pid is not None and crash_pid == parent_pid:
+        result["crashed_parent"] = True
+        return result
+    process_type = pid_types.get(crash_pid)
+    field = _PROCESS_TYPE_FIELDS.get(process_type) if process_type else None
+    if field is not None:
+        result[field] = True
+    return result
 
 
 def _collect_dump_files(dump_dir: Path) -> dict[str, str]:
@@ -359,8 +502,13 @@ async def browser_evaluator(  # pragma: no cover
     # Process assets (prefs, etc.) - required for Firefox to launch properly
     target.process_assets()
 
+    # Sample the live process tree throughout the run so we can attribute a
+    # crash to its process type (parent vs. content/GPU/RDD/...).
+    sampler = _ProcessTreeSampler(partial(_list_target_processes, target))
+
     results = []
     try:
+        sampler.start()
         with Sapphire(auto_close=1) as server:
             target.reverse(server.port, server.port)
             with ReplayManager(
@@ -385,8 +533,10 @@ async def browser_evaluator(  # pragma: no cover
                     if logs.crashdata:
                         return BrowserCrashInfo(
                             crashed=True,
-                            crashed_parent=_crashed_parent(
-                                target.parent_pid, logs.crashdata
+                            **_classify_crash(
+                                target.parent_pid,
+                                sampler.pid_types,
+                                logs.crashdata,
                             ),
                             files={},
                             logs=logs,
@@ -422,13 +572,14 @@ async def browser_evaluator(  # pragma: no cover
             logs = read_grizzly_logs(report.path)
             return BrowserCrashInfo(
                 crashed=True,
-                crashed_parent=_crashed_parent(target.parent_pid, logs.crashdata),
+                **_classify_crash(target.parent_pid, sampler.pid_types, logs.crashdata),
                 files=_collect_dump_files(dump_dir),
                 logs=logs,
                 message="Crash detected",
             )
 
     finally:
+        sampler.stop()
         testcase.cleanup()
         if target.launch_timeout_report is not None:
             target.launch_timeout_report.cleanup()

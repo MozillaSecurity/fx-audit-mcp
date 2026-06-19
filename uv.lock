@@ -761,6 +761,7 @@ dependencies = [
     { name = "fuzzmanager" },
     { name = "grizzly-framework" },
     { name = "prefpicker" },
+    { name = "psutil" },
     { name = "pydantic" },
 ]
 
@@ -776,6 +777,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "python-semantic-release" },
     { name = "ruff" },
+    { name = "types-psutil" },
 ]
 
 [package.metadata]
@@ -784,6 +786,7 @@ requires-dist = [
     { name = "fuzzmanager", specifier = ">=0.9.1" },
     { name = "grizzly-framework", specifier = ">=1.0.0" },
     { name = "prefpicker", specifier = ">=2.22.0" },
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
@@ -799,6 +802,7 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.0.0" },
     { name = "python-semantic-release", specifier = ">=9.0.0" },
     { name = "ruff", specifier = ">=0.4.0" },
+    { name = "types-psutil", specifier = ">=5.9.0" },
 ]
 
 [[package]]
@@ -2228,6 +2232,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cc/18/0bbf3884e9eaa38819ebe46a7bd25dcd56b67434402b66a58c4b8e552575/tomlkit-0.13.3.tar.gz", hash = "sha256:430cf247ee57df2b94ee3fbe588e71d362a941ebb545dec29b53961d61add2a1", size = 185207, upload-time = "2025-06-05T07:13:44.947Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bd/75/8539d011f6be8e29f339c42e633aae3cb73bffa95dd0f9adec09b9c58e85/tomlkit-0.13.3-py3-none-any.whl", hash = "sha256:c89c649d79ee40629a9fda55f8ace8c6a1b42deb912b2a8fd8d942ddadb606b0", size = 38901, upload-time = "2025-06-05T07:13:43.546Z" },
+]
+
+[[package]]
+name = "types-psutil"
+version = "7.2.2.20260518"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/f1/6901857281d4e8d792492e1495eef6f4f01318a3b6a066486d81000a4511/types_psutil-7.2.2.20260518.tar.gz", hash = "sha256:9f825f631463a5b4d26f19f63aebc9ec25f01140d655026f3ad8a67841f9b331", size = 26660, upload-time = "2026-05-18T06:05:09.389Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/eb/f726339668879819599c74c2e1f0cab760912a4159046942bdae2ad37bd6/types_psutil-7.2.2.20260518-py3-none-any.whl", hash = "sha256:6a3d697665754a60d7b5a41d5a2cff12b53f5e0676d77810cd28ba5e14cb4049", size = 32820, upload-time = "2026-05-18T06:05:08.321Z" },
 ]
 
 [[package]]

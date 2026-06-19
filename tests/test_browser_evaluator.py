@@ -9,10 +9,12 @@ import pytest
 
 from fx_audit_mcp.browser_evaluator import (
     MAX_LOG_SIZE,
+    _classify_crash,
+    _cmdline_process_type,
     _collect_dump_files,
-    _crashed_parent,
     _extract_crash_pid,
     _load_ignored_signatures,
+    _record_process_types,
     browser_evaluator,
     package_testcase,
     read_grizzly_logs,
@@ -157,18 +159,115 @@ class TestCollectDumpFiles:
 _ASAN_CRASHDATA = "==4242==ERROR: AddressSanitizer: x"
 
 
-@pytest.mark.parametrize(
-    ("parent_pid", "crashdata", "expected"),
-    [
-        (4242, _ASAN_CRASHDATA, True),
-        (9999, _ASAN_CRASHDATA, False),
-        (None, _ASAN_CRASHDATA, False),
-        (4242, "Segmentation fault (core dumped)", False),
-    ],
-)
-def test_crashed_parent(parent_pid: int | None, crashdata: str, expected: bool) -> None:
-    """Verify that _crashed_parent returns True only when PIDs are known and match."""
-    assert _crashed_parent(parent_pid, crashdata) is expected
+class TestCmdlineProcessType:
+    @pytest.mark.parametrize(
+        ("cmdline", "expected"),
+        [
+            (["firefox", "-contentproc", "-parentPid", "1", "tab"], "tab"),
+            (["firefox", "-contentproc", "-parentPid", "1", "gpu"], "gpu"),
+            (["firefox", "-contentproc", "-parentPid", "1", "rdd"], "rdd"),
+            (["firefox", "-contentproc", "-parentPid", "1", "gmplugin"], "gmplugin"),
+            (["firefox", "-contentproc", "-parentPid", "1", "socket"], "socket"),
+            (["firefox", "-contentproc", "-parentPid", "1", "utility"], "utility"),
+        ],
+    )
+    def test_known_child_types(self, cmdline: list[str], expected: str) -> None:
+        """Each child process-type token is recognized from its command line."""
+        assert _cmdline_process_type(cmdline) == expected
+
+    def test_parent_has_no_type(self) -> None:
+        """A command line without -contentproc (the parent) yields None."""
+        assert _cmdline_process_type(["firefox", "-foreground"]) is None
+
+    def test_unknown_child_type(self) -> None:
+        """A -contentproc process with no known type token yields None."""
+        assert _cmdline_process_type(["firefox", "-contentproc", "vr"]) is None
+
+    def test_empty_cmdline(self) -> None:
+        """An empty command line yields None."""
+        assert _cmdline_process_type([]) is None
+
+
+_CRASH_FIELDS = {
+    "crashed_parent",
+    "crashed_content",
+    "crashed_gpu",
+    "crashed_rdd",
+    "crashed_gmp",
+    "crashed_socket",
+    "crashed_utility",
+}
+
+
+class TestClassifyCrash:
+    @pytest.mark.parametrize(
+        ("parent_pid", "pid_types", "crashdata", "expected_true"),
+        [
+            (4242, {}, _ASAN_CRASHDATA, "crashed_parent"),
+            (1, {4242: "tab"}, _ASAN_CRASHDATA, "crashed_content"),
+            (1, {4242: "gpu"}, _ASAN_CRASHDATA, "crashed_gpu"),
+            (1, {4242: "rdd"}, _ASAN_CRASHDATA, "crashed_rdd"),
+            (1, {4242: "gmplugin"}, _ASAN_CRASHDATA, "crashed_gmp"),
+            (1, {4242: "socket"}, _ASAN_CRASHDATA, "crashed_socket"),
+            (1, {4242: "utility"}, _ASAN_CRASHDATA, "crashed_utility"),
+        ],
+    )
+    def test_single_flag_set(
+        self,
+        parent_pid: int | None,
+        pid_types: dict[int, str],
+        crashdata: str,
+        expected_true: str,
+    ) -> None:
+        """The crashing PID sets exactly the flag for its process type."""
+        result = _classify_crash(parent_pid, pid_types, crashdata)
+        assert result[expected_true] is True
+        assert all(not v for k, v in result.items() if k != expected_true)
+
+    @pytest.mark.parametrize(
+        ("parent_pid", "pid_types", "crashdata"),
+        [
+            (1, {}, _ASAN_CRASHDATA),  # crash PID never sampled
+            (1, {4242: "vr"}, _ASAN_CRASHDATA),  # sampled but unknown type
+            (4242, {}, "Segmentation fault (core dumped)"),  # no ASAN PID marker
+        ],
+    )
+    def test_unattributable_crash_all_false(
+        self,
+        parent_pid: int | None,
+        pid_types: dict[int, str],
+        crashdata: str,
+    ) -> None:
+        """A real but unattributable crash leaves every flag False."""
+        result = _classify_crash(parent_pid, pid_types, crashdata)
+        assert set(result) == _CRASH_FIELDS
+        assert not any(result.values())
+
+
+class TestRecordProcessTypes:
+    def test_accumulates_and_retains_dead_processes(self) -> None:
+        """Sampled types accumulate and survive a process leaving the tree."""
+        pid_types: dict[int, str] = {}
+        _record_process_types(
+            pid_types, [(10, ["firefox", "-contentproc", "-parentPid", "1", "tab"])]
+        )
+        # PID 10 is gone from this snapshot but the earlier record is retained.
+        _record_process_types(
+            pid_types, [(20, ["firefox", "-contentproc", "-parentPid", "1", "gpu"])]
+        )
+        assert pid_types == {10: "tab", 20: "gpu"}
+
+    def test_ignores_parent_and_unknown(self) -> None:
+        """Processes without a known child type are not recorded."""
+        pid_types: dict[int, str] = {}
+        _record_process_types(
+            pid_types,
+            [
+                (1, ["firefox", "-foreground"]),
+                (2, ["firefox", "-contentproc", "vr"]),
+            ],
+        )
+        assert not pid_types
 
 
 class TestIgnoredSignatures:
