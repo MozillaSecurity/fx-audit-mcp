@@ -9,10 +9,13 @@ import pytest
 
 from fx_audit_mcp.browser_evaluator import (
     MAX_LOG_SIZE,
+    PREF_BLOCKLIST_ENV,
+    _check_pref_blocklist,
     _collect_dump_files,
     _crashed_parent,
     _extract_crash_pid,
     _load_ignored_signatures,
+    _load_pref_blocklist,
     browser_evaluator,
     package_testcase,
     read_grizzly_logs,
@@ -67,6 +70,65 @@ class TestReadGrizzlyLogs:
         result = read_grizzly_logs(tmp_path)
         assert len(result.stderr) == MAX_LOG_SIZE
         assert result.stderr == content[-MAX_LOG_SIZE:]
+
+
+class TestCheckPrefBlocklist:
+    @staticmethod
+    def _write_prefs(tmp_path: Path, names: list[str]) -> Path:
+        prefs_path = tmp_path / "prefs.js"
+        lines = ["// Generated with PrefPicker"]
+        lines += [f'user_pref("{name}", false);' for name in names]
+        prefs_path.write_text("\n".join(lines) + "\n")
+        return prefs_path
+
+    def test_no_match_returns_none(self, tmp_path: Path) -> None:
+        """No exception when no blocklisted pref is present."""
+        prefs_path = self._write_prefs(tmp_path, ["dom.workers.enabled"])
+        assert _check_pref_blocklist(prefs_path, ["security.foo"]) is None
+
+    def test_single_match_raises(self, tmp_path: Path) -> None:
+        """A present blocklisted pref raises ValueError naming it."""
+        prefs_path = self._write_prefs(tmp_path, ["dom.workers.enabled"])
+        with pytest.raises(ValueError, match="Blocked prefs detected"):
+            _check_pref_blocklist(prefs_path, ["dom.workers.enabled"])
+
+    def test_multiple_matches_report_each(self, tmp_path: Path) -> None:
+        """Every matched pref is named in the raised message."""
+        prefs_path = self._write_prefs(
+            tmp_path, ["dom.workers.enabled", "geo.enabled", "media.gmp.enabled"]
+        )
+        with pytest.raises(ValueError) as exc_info:
+            _check_pref_blocklist(prefs_path, ["dom.workers.enabled", "geo.enabled"])
+        message = str(exc_info.value)
+        assert "dom.workers.enabled" in message
+        assert "geo.enabled" in message
+        assert "media.gmp.enabled" not in message
+
+
+class TestLoadPrefBlocklist:
+    def test_env_unset_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No blocklist file configured means an empty list."""
+        monkeypatch.delenv(PREF_BLOCKLIST_ENV, raising=False)
+        assert _load_pref_blocklist() == []
+
+    def test_parses_names_ignoring_blanks_and_comments(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank lines and '#' comments are skipped; names keep file order."""
+        blocklist = tmp_path / "blocklist.txt"
+        blocklist.write_text(
+            "# blocked prefs\ndom.workers.enabled\n\n  geo.enabled  \n"
+        )
+        monkeypatch.setenv(PREF_BLOCKLIST_ENV, str(blocklist))
+        assert _load_pref_blocklist() == ["dom.workers.enabled", "geo.enabled"]
+
+    def test_missing_file_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured but absent blocklist file raises FileNotFoundError."""
+        monkeypatch.setenv(PREF_BLOCKLIST_ENV, str(tmp_path / "missing.txt"))
+        with pytest.raises(FileNotFoundError, match="Pref blocklist file not found"):
+            _load_pref_blocklist()
 
 
 class TestPackageTestcase:

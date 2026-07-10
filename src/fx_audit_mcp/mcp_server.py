@@ -4,8 +4,11 @@ Serves browser_evaluator, package_testcase, js_shell_evaluator,
 build_firefox, build_nss, and nss_gtest_evaluator over stdio.
 
 Configuration is via environment variables:
-  FIREFOX_SOURCE_ROOT  — default Firefox source directory for build tools
-  FIREFOX_BINARY       — path to Firefox binary; used to derive build_dir
+  FIREFOX_SOURCE_ROOT    — default Firefox source directory for build tools
+  FIREFOX_BINARY         — path to Firefox binary; used to derive build_dir
+  FIREFOX_PREF_BLOCKLIST — path to a file listing pref names (one per line) that
+                           must not reach the browser; browser_evaluator raises
+                           if any appears in the generated prefs.js
 """
 
 import sys
