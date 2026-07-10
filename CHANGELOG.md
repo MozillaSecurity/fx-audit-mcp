@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-07-10)
+
+### Features
+
+- Add support for prefs blocklist
+  ([`364e48b`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/364e48b988f32a922ebe9defe4418a7b3b9809b6))
+
+
 ## v1.1.2 (2026-06-15)
 
 ### Bug Fixes
