@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import tempfile
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 
 MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
+PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
+_USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
 
 # Suppress grizzly's verbose logging (but allow CRITICAL and ERROR)
 getLogger("grizzly").setLevel(ERROR)
@@ -178,6 +181,59 @@ def _load_ignored_signatures() -> list[CrashSignature]:
     ]
 
 
+def _check_pref_blocklist(prefs_path: Path, pref_blocklist: list[str]) -> None:
+    """Raise if any blocklisted pref name appears in the generated prefs.js.
+
+    Matching is by pref name only (value-independent). All matched prefs are
+    named in the raised error message.
+
+    Args:
+        prefs_path: Path to the generated prefs.js to inspect.
+        pref_blocklist: Pref names that must not appear in prefs.js.
+
+    Raises:
+        ValueError: If one or more blocklisted pref names are present.
+    """
+    blocked = set(pref_blocklist)
+    present = {
+        m.group(1)
+        for line in prefs_path.read_text(encoding="utf-8").splitlines()
+        for m in (_USER_PREF_RE.match(line.strip()),)
+        if m
+    }
+    matched = sorted(present & blocked)
+    if matched:
+        message = f"Blocked prefs detected: {', '.join(matched)}"
+        raise ValueError(message)
+
+
+def _load_pref_blocklist() -> list[str]:
+    """Load blocked pref names from the file named by PREF_BLOCKLIST_ENV.
+
+    Blank lines and lines starting with ``#`` are ignored.
+
+    Returns:
+        Blocked pref names in file order, or an empty list when the env var is
+        unset.
+
+    Raises:
+        FileNotFoundError: If the env var is set but the file does not exist.
+    """
+    path_str = os.environ.get(PREF_BLOCKLIST_ENV)
+    if not path_str:
+        return []
+    path = Path(path_str)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Pref blocklist file not found at {path} (from ${PREF_BLOCKLIST_ENV})"
+        )
+    return [
+        stripped
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("#")
+    ]
+
+
 def read_grizzly_logs(log_dir: Path) -> Logs:
     """Categorize log_*.txt files in *log_dir* into stderr/stdout/crashdata.
 
@@ -299,6 +355,11 @@ async def browser_evaluator(  # pragma: no cover
     The ``prefs`` argument is merged on top of a hardened baseline of Firefox
     prefs; caller-supplied values override the baseline.
 
+    When the ``FIREFOX_PREF_BLOCKLIST`` environment variable names a file, the
+    generated prefs.js is checked against the blocked pref names it lists (one
+    per line); a match raises ValueError before Firefox launches. This guard
+    cannot be disabled by the caller.
+
     Ignored-signature matches (loaded from ``ignored_signatures/``) are
     filtered out before this returns. Captured logs are tail-truncated to
     MAX_LOG_SIZE. On crash, the dumped testcase directory contents are
@@ -354,6 +415,7 @@ async def browser_evaluator(  # pragma: no cover
             prefs_path,
             additional_prefs=merged_prefs,
         )
+        _check_pref_blocklist(prefs_path, _load_pref_blocklist())
         target.asset_mgr.add("prefs", prefs_path)
 
     # Process assets (prefs, etc.) - required for Firefox to launch properly
