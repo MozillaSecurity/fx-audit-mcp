@@ -318,6 +318,7 @@ async def package_testcase(
         assert template is not None
         PrefPicker.load_template(template).create_prefsjs(
             prefs_path,
+            variant="code-review",
             additional_prefs=merged_prefs,
         )
         testcase.assets = {"prefs": "prefs.js"}
