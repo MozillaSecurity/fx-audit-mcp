@@ -20,7 +20,7 @@ dependencies = [
     "fastmcp>=3.0.0",
     "fuzzmanager>=0.9.1",
     "grizzly-framework>=1.0.0",
-    "prefpicker>=2.24.1",
+    "prefpicker>=2.25.0",
     "pydantic>=2.0.0",
 ]
 
