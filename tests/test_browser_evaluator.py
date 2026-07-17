@@ -164,8 +164,8 @@ class TestPackageTestcase:
         assert "dom.workers.enabled" in prefs_content
         assert "browser.backup.enabled" in prefs_content
 
-    def test_baseline_prefs_without_custom(self, tmp_path: Path) -> None:
-        """Baseline prefs are included even when no custom prefs are given."""
+    def test_template_prefs_without_custom(self, tmp_path: Path) -> None:
+        """Template prefs are included even when no custom prefs are given."""
         tc_dir = tmp_path / "testcase"
         tc_dir.mkdir()
         (tc_dir / "test.html").write_text("<html></html>")

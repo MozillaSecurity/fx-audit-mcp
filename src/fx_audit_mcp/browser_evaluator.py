@@ -33,69 +33,6 @@ getLogger("grizzly").setLevel(ERROR)
 getLogger("ffpuppet").setLevel(ERROR)
 getLogger("sapphire").setLevel(ERROR)
 
-# Baseline prefs written to every profile launched by browser_evaluator.
-# Quiets log spam and prevents network calls that slow down or noise up runs.
-_BASELINE_PREFS: dict[str, str | int | bool] = {
-    # Disable Experiments / Normandy
-    "app.normandy.enabled": False,
-    "app.shield.optoutstudies.enabled": False,
-    # Disable application updates
-    "app.update.disabledForTesting": True,
-    # Disable BackupService (errors about Documents directory)
-    "browser.backup.enabled": False,
-    # Prevent activity stream feeds from initializing (CDN errors)
-    "browser.newtabpage.enabled": False,
-    "browser.newtabpage.activity-stream.testing.shouldInitializeFeeds": False,
-    # Disable region detection network fetch
-    "browser.region.network.url": "",
-    "browser.region.update.enabled": False,
-    # Disable safe browsing list updates
-    "browser.safebrowsing.downloads.enabled": False,
-    # Disable translations (downloads Bergamot ML language models over the network)
-    "browser.translations.enable": False,
-    # Disable Merino/URLBar suggestion fetches
-    "browser.urlbar.merino.endpointURL": "",
-    "browser.urlbar.quicksuggest.enabled": False,
-    # Select theme to prevent log spam
-    "extensions.activeThemeID": "default-theme@mozilla.org",
-    "browser.theme.content-theme": 2,
-    "browser.theme.toolbar-theme": 2,
-    # Disable system addon and addon repository updates
-    "extensions.blocklist.enabled": False,
-    "extensions.systemAddon.update.enabled": False,
-    "extensions.update.enabled": False,
-    # Disable built-in WebExtensions to avoid "context not found" spam
-    "extensions.formautofill.addresses.enabled": False,
-    "extensions.formautofill.creditCards.enabled": False,
-    "extensions.getAddons.cache.enabled": False,
-    "extensions.installDistroAddons": False,
-    "extensions.webcompat.enabled": False,
-    # Disable Firefox Accounts
-    "identity.fxaccounts.enabled": False,
-    # Disable health report
-    "datareporting.healthreport.service.enabled": False,
-    # Disable Geolocation
-    "geo.enabled": False,
-    # Disable GMP plugin downloads (OpenH264, Widevine)
-    "media.gmp-manager.updateEnabled": False,
-    # Quiet remote settings logging and prevent network hits
-    "messaging-system.log": "off",
-    # Disable captive portal / connectivity network probes
-    "network.captive-portal-service.enabled": False,
-    "network.connectivity-service.enabled": False,
-    # Disable Nimbus
-    "nimbus.rollouts.enabled": False,
-    # Disable tracking-list updates
-    "privacy.trackingprotection.enabled": False,
-    # Disable Remote Settings
-    "services.settings.loglevel": "off",
-    "services.settings.server": "data:,#remote-settings-dummy/v1",
-    # Disable Sync addons
-    "services.sync.engine.addons": False,
-    # Disable telemetry
-    "toolkit.telemetry.enabled": False,
-}
-
 
 class _FxAuditFirefoxTarget(FirefoxTarget):
     """Firefox target that records the parent PID at launch time."""
@@ -274,8 +211,8 @@ async def package_testcase(
     and env) into a replayable grizzly TestCase suitable for browser_evaluator
     or the standalone grizzly replay tool.
 
-    Custom prefs are merged on top of the prefpicker browser-fuzzing template
-    and the baseline prefs; the emitted prefs.js holds the full effective set.
+    Custom prefs are merged on top of the prefpicker browser-fuzzing template;
+    the emitted prefs.js holds the full effective set.
 
     Args:
         testcase_path: Path to a directory containing all files in the testcase
@@ -283,7 +220,7 @@ async def package_testcase(
         entry_point: Filename within ``testcase_path`` that the browser loads
             first; must exist in ``testcase_path`` (e.g. ``test.html``).
         prefs: Optional custom Firefox preferences to layer on top of the
-            baseline (e.g. ``{"dom.workers.enabled": False}``).
+            prefpicker template (e.g. ``{"dom.workers.enabled": False}``).
         env: Optional environment variables to record on the bundled testcase
             (e.g. ``{"MOZ_LOG": "ConsoleAPI:5"}``).
 
@@ -308,10 +245,6 @@ async def package_testcase(
                 required=is_entry,
             )
 
-        merged_prefs: dict[str, str | int | bool] = dict(_BASELINE_PREFS)
-        if prefs:
-            merged_prefs.update(prefs)
-
         assets_dir = Path(tempfile.mkdtemp(prefix="fx_audit_assets_"))
         prefs_path = assets_dir / "prefs.js"
         template = PrefPicker.lookup_template("browser-fuzzing.yml")
@@ -319,7 +252,7 @@ async def package_testcase(
         PrefPicker.load_template(template).create_prefsjs(
             prefs_path,
             variant="code-review",
-            additional_prefs=merged_prefs,
+            additional_prefs=prefs,
         )
         testcase.assets = {"prefs": "prefs.js"}
         testcase.assets_path = assets_dir
@@ -353,8 +286,8 @@ async def browser_evaluator(  # pragma: no cover
     The following environment variables are always set on the browser process:
     - MOZ_LOG=console:5,PageMessages:5
 
-    The ``prefs`` argument is merged on top of a hardened baseline of Firefox
-    prefs; caller-supplied values override the baseline.
+    The ``prefs`` argument is merged on top of the prefpicker browser-fuzzing
+    template; caller-supplied values override the template.
 
     When the ``FIREFOX_PREF_BLOCKLIST`` environment variable names a file, the
     generated prefs.js is checked against the blocked pref names it lists (one
@@ -372,7 +305,8 @@ async def browser_evaluator(  # pragma: no cover
             the extension Firefox uses to dispatch the file.
         firefox_binary: Absolute path to the Firefox binary.
         timeout: Per-run timeout in seconds before closing the browser.
-        prefs: Optional custom Firefox prefs to layer on top of the baseline.
+        prefs: Optional custom Firefox prefs to layer on top of the prefpicker
+            template.
     """
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
@@ -403,11 +337,9 @@ async def browser_evaluator(  # pragma: no cover
     # Minimize log spam from mesa
     target.environ["EGL_LOG_LEVEL"] = "fatal"
 
-    # Always generate prefs.js from prefpicker template with hardcoded
-    # baseline prefs, plus any user-supplied custom prefs on top.
-    # These are set on the target profile (not the testcase) so they
-    # don't appear in testcase dump output.
-    merged_prefs = {**_BASELINE_PREFS, **prefs} if prefs else _BASELINE_PREFS
+    # Always generate prefs.js from the prefpicker template, plus any
+    # user-supplied custom prefs on top. These are set on the target profile
+    # (not the testcase) so they don't appear in testcase dump output.
     with tempfile.TemporaryDirectory(prefix="fx_audit_prefs_") as prefs_dir:
         prefs_path = Path(prefs_dir) / "prefs.js"
         template = PrefPicker.lookup_template("browser-fuzzing.yml")
@@ -415,7 +347,7 @@ async def browser_evaluator(  # pragma: no cover
         PrefPicker.load_template(template).create_prefsjs(
             prefs_path,
             variant="code-review",
-            additional_prefs=merged_prefs,
+            additional_prefs=prefs,
         )
         _check_pref_blocklist(prefs_path, _load_pref_blocklist())
         target.asset_mgr.add("prefs", prefs_path)
