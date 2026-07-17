@@ -414,6 +414,7 @@ async def browser_evaluator(  # pragma: no cover
         assert template is not None
         PrefPicker.load_template(template).create_prefsjs(
             prefs_path,
+            variant="code-review",
             additional_prefs=merged_prefs,
         )
         _check_pref_blocklist(prefs_path, _load_pref_blocklist())
