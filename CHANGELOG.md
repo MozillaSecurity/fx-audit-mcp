@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.2 (2026-07-17)
+
+### Bug Fixes
+
+- **prefs**: Use code-review prefs variant in all cases
+  ([`b449d03`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/b449d03165c44e870db487cd80d33bcd0012d9b4))
+
+
 ## v1.2.1 (2026-07-15)
 
 ### Bug Fixes
