@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.3 (2026-07-17)
+
+### Bug Fixes
+
+- **prefs**: Pickup variant improvements in prefpicker
+  ([`e1496b3`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e1496b33a5a1d4f63fb31e2a24dee932d38ce043))
+
+
 ## v1.2.2 (2026-07-17)
 
 ### Bug Fixes
