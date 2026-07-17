@@ -783,7 +783,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.0.0" },
     { name = "fuzzmanager", specifier = ">=0.9.1" },
     { name = "grizzly-framework", specifier = ">=1.0.0" },
-    { name = "prefpicker", specifier = ">=2.24.0" },
+    { name = "prefpicker", specifier = ">=2.24.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
@@ -1459,14 +1459,14 @@ wheels = [
 
 [[package]]
 name = "prefpicker"
-version = "2.24.0"
+version = "2.24.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/39/1e68e664371c7d84c2d79465568d943808b391484afeb992d47d6ec97b71/prefpicker-2.24.0.tar.gz", hash = "sha256:30a31b4f0e2ca0d47223896d71ccb7cee1cdc2fa097f28e1ea4b4d9749c8c246", size = 26986, upload-time = "2026-07-15T20:09:00.32Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/53/c70ae8fddd0d59c9922cf62339e29301b92b636e03d36a4d1482a448538e/prefpicker-2.24.1.tar.gz", hash = "sha256:880fb5a94804201128382b25d715e87f13a2833e0e35971819505ee120de63de", size = 26924, upload-time = "2026-07-17T18:30:48.236Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/a2/c67ea6734b468979db7175bc5aa7a81ca43b1d4963857fc0c8209f966c11/prefpicker-2.24.0-py3-none-any.whl", hash = "sha256:356c034059bed727490c29016f4ee3658ceb03b0973f9773a72366cba81403ac", size = 24668, upload-time = "2026-07-15T20:08:59.208Z" },
+    { url = "https://files.pythonhosted.org/packages/38/d1/5ae4759395b4616b3fab82e392c956e3cd283acec97d7b0bd31454ee98f5/prefpicker-2.24.1-py3-none-any.whl", hash = "sha256:46fd9aaad433f54c95980edb90c233d5e7506a3c0202fca0ec93ab41ce7ad329", size = 24619, upload-time = "2026-07-17T18:30:47.128Z" },
 ]
 
 [[package]]
