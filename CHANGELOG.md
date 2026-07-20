@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.2.4 (2026-07-20)
+
+### Bug Fixes
+
+- Bump build version to pickup pref changes
+  ([`bb4774b`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/bb4774b445053b09498988b0fdee5ddccc978808))
+
+### Refactoring
+
+- **prefs**: Remove _BASELINE_PREFS, rely on prefpicker template
+  ([`98eb9d8`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/98eb9d8e980a42505736ca16bb3882b3f785a272))
+
+
 ## v1.2.3 (2026-07-17)
 
 ### Bug Fixes
