@@ -274,6 +274,7 @@ async def browser_evaluator(  # pragma: no cover
     firefox_binary: Path,
     timeout: int = 30,
     prefs: dict[str, str | int | bool] | None = None,
+    enable_sandbox: bool = False,
 ) -> BrowserCrashInfo:
     """Reproduce a Firefox crash by running an HTML/JS testcase under
     ASAN-instrumented Firefox and reporting any crash detected.
@@ -285,6 +286,11 @@ async def browser_evaluator(  # pragma: no cover
 
     The following environment variables are always set on the browser process:
     - MOZ_LOG=console:5,PageMessages:5
+
+    By default the browser sandbox is disabled via the MOZ_DISABLE_*_SANDBOX
+    environment variables (content, GMP, GPU, RDD, socket process, utility and
+    VR). Setting ``enable_sandbox`` removes those variables so the sandbox
+    stays enabled.
 
     The ``prefs`` argument is merged on top of the prefpicker browser-fuzzing
     template; caller-supplied values override the template.
@@ -307,6 +313,10 @@ async def browser_evaluator(  # pragma: no cover
         timeout: Per-run timeout in seconds before closing the browser.
         prefs: Optional custom Firefox prefs to layer on top of the prefpicker
             template.
+        enable_sandbox: Leave the Firefox sandbox enabled. Off by default, which
+            disables sandboxing so the browser behaves like other fuzzing and
+            replay runs. Enabling the sandbox can interfere with crash log
+            creation, so crashes may be missed.
     """
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
@@ -325,6 +335,7 @@ async def browser_evaluator(  # pragma: no cover
     display_mode = "xvfb" if sys.platform == "linux" else "default"
     target = _FxAuditFirefoxTarget(
         binary=firefox_binary,
+        disable_sandboxing=not enable_sandbox,
         display_mode=display_mode,
         launch_timeout=30,
         log_limit=0,

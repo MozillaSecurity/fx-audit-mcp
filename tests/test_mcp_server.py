@@ -42,6 +42,18 @@ class TestBrowserEvaluatorSchema:
         description: str = tool.to_mcp_tool().model_dump()["description"]
         assert prose == description
 
+    @pytest.mark.anyio
+    async def test_enable_sandbox_is_optional_bool(self) -> None:
+        """enable_sandbox is exposed as an optional boolean defaulting to off."""
+        tool = await mcp.get_tool("browser_evaluator")
+        assert tool is not None
+        schema = tool.to_mcp_tool().model_dump()["inputSchema"]
+        assert "enable_sandbox" not in schema["required"]
+        param = schema["properties"]["enable_sandbox"]
+        assert param["type"] == "boolean"
+        assert param["default"] is False
+        assert param["description"]
+
 
 def test_keyboard_interrupt_exits_zero(mocker: MockerFixture) -> None:
     """KeyboardInterrupt causes main() to exit 0."""
