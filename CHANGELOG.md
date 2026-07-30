@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-07-30)
+
+### Features
+
+- **browser_evaluator**: Add enable_sandbox argument
+  ([`c8ea3b3`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/c8ea3b30fcd02fa24fd1b5e4e0821ede2f234fa5))
+
+
 ## v1.2.4 (2026-07-20)
 
 ### Bug Fixes
