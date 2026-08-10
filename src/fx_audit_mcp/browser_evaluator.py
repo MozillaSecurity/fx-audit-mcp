@@ -27,6 +27,9 @@ MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
 PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
 _USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
+_CHILD_LAUNCH_RE = re.compile(
+    r"\+\+PROCESS \[pid = (\d+)\] \[childID = \d+\] \[type = (.*)\]"
+)
 
 # Suppress grizzly's verbose logging (but allow CRITICAL and ERROR)
 getLogger("grizzly").setLevel(ERROR)
@@ -74,10 +77,58 @@ def _extract_crash_pid(crashdata: str) -> int | None:
     return None
 
 
-def _crashed_parent(parent_pid: int | None, crashdata: str) -> bool:
-    """Return True when the ASAN crashdata PID matches the known parent PID."""
-    crash_pid = _extract_crash_pid(crashdata)
-    return parent_pid is not None and crash_pid is not None and crash_pid == parent_pid
+def _extract_crash_ptype(crash_pid: int | None, stderr: str) -> str | None:
+    """Extract the GeckoProcessType of the crashing child process.
+
+    Looks up *crash_pid* in the ChildProcessLifecycle log the parent writes to
+    stderr (enabled via the MOZ_LOG modules set by browser_evaluator).
+
+    Args:
+        crash_pid: PID of the crashing process, as reported by ASAN.
+        stderr: Process stderr captured during the run.
+
+    Returns:
+        Process type of the crashing child (e.g. "tab", "gpu"), or None when
+        the PID is unknown or was not launched as a child process (e.g. the
+        parent).
+    """
+    if crash_pid is None:
+        return None
+    # A PID can be reused, so the last launch wins.
+    process_type = None
+    for match in _CHILD_LAUNCH_RE.finditer(stderr):
+        if int(match.group(1)) == crash_pid:
+            process_type = match.group(2)
+    return process_type
+
+
+def _crashed_process_fields(
+    logs: Logs, parent_pid: int | None
+) -> dict[str, bool | None]:
+    """Determine which process a crash occurred in.
+
+    Args:
+        logs: Logs captured for the crash. The ASAN PID is read from crashdata
+            and resolved against the ChildProcessLifecycle records in stderr.
+        parent_pid: PID of the Firefox parent process, or None if unknown.
+
+    Returns:
+        The BrowserCrashInfo process flags. A flag is None when the crashing
+        process cannot be identified - crashdata carries no ASAN PID marker,
+        or no launch record for that PID survives in stderr - so an unresolved
+        crash is not reported as having happened in none of these processes.
+    """
+    crash_pid = _extract_crash_pid(logs.crashdata)
+    crash_ptype = _extract_crash_ptype(crash_pid, logs.stderr)
+    return {
+        "crashed_parent": crash_pid == parent_pid if crash_pid and parent_pid else None,
+        "crashed_content": crash_ptype == "tab" if crash_ptype else None,
+        "crashed_gpu": crash_ptype == "gpu" if crash_ptype else None,
+        "crashed_rdd": crash_ptype == "rdd" if crash_ptype else None,
+        "crashed_gmp": crash_ptype == "gmplugin" if crash_ptype else None,
+        "crashed_socket": crash_ptype == "socket" if crash_ptype else None,
+        "crashed_utility": crash_ptype == "utility" if crash_ptype else None,
+    }
 
 
 def _collect_dump_files(dump_dir: Path) -> dict[str, str]:
@@ -285,7 +336,7 @@ async def browser_evaluator(  # pragma: no cover
     On other platforms, the OS default display is used (visible window).
 
     The following environment variables are always set on the browser process:
-    - MOZ_LOG=console:5,PageMessages:5
+    - MOZ_LOG=console:5,PageMessages:5,ChildProcessLifecycle:5
 
     By default the browser sandbox is disabled via the MOZ_DISABLE_*_SANDBOX
     environment variables (content, GMP, GPU, RDD, socket process, utility and
@@ -343,7 +394,7 @@ async def browser_evaluator(  # pragma: no cover
     )
 
     # Enable verbose logging
-    target.environ["MOZ_LOG"] = "console:5,PageMessages:5"
+    target.environ["MOZ_LOG"] = "console:5,PageMessages:5,ChildProcessLifecycle:5"
 
     # Minimize log spam from mesa
     target.environ["EGL_LOG_LEVEL"] = "fatal"
@@ -392,9 +443,7 @@ async def browser_evaluator(  # pragma: no cover
                     if logs.crashdata:
                         return BrowserCrashInfo(
                             crashed=True,
-                            crashed_parent=_crashed_parent(
-                                target.parent_pid, logs.crashdata
-                            ),
+                            **_crashed_process_fields(logs, target.parent_pid),
                             files={},
                             logs=logs,
                             message="Crash detected",
@@ -429,7 +478,7 @@ async def browser_evaluator(  # pragma: no cover
             logs = read_grizzly_logs(report.path)
             return BrowserCrashInfo(
                 crashed=True,
-                crashed_parent=_crashed_parent(target.parent_pid, logs.crashdata),
+                **_crashed_process_fields(logs, target.parent_pid),
                 files=_collect_dump_files(dump_dir),
                 logs=logs,
                 message="Crash detected",

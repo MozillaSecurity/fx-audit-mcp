@@ -12,8 +12,9 @@ from fx_audit_mcp.browser_evaluator import (
     PREF_BLOCKLIST_ENV,
     _check_pref_blocklist,
     _collect_dump_files,
-    _crashed_parent,
+    _crashed_process_fields,
     _extract_crash_pid,
+    _extract_crash_ptype,
     _load_ignored_signatures,
     _load_pref_blocklist,
     browser_evaluator,
@@ -216,21 +217,79 @@ class TestCollectDumpFiles:
         assert "�" in files["binary.bin"]
 
 
-_ASAN_CRASHDATA = "==4242==ERROR: AddressSanitizer: x"
+class TestExtractCrashPtype:
+    _PREFIX = "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
+    _LIFECYCLE_LOG = (
+        f"{_PREFIX}++PROCESS [pid = 4242] [childID = 1] [type = tab]\n"
+        f"{_PREFIX}++PROCESS [pid = 4243] [childID = 2] [type = gpu]\n"
+        f"{_PREFIX}++PROCESS [pid = 4244] [childID = 3] [type = utility]\n"
+        f"{_PREFIX}++PROCESS [pid = 4245] [childID = 4] [type = rdd]\n"
+        f"{_PREFIX}--PROCESS [pid = 4245] [childID = 4] [type = rdd]\n"
+        f"{_PREFIX}++PROCESS [pid = 4245] [childID = 5] [type = socket]\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("crash_pid", "expected"),
+        [
+            (4242, "tab"),
+            (4243, "gpu"),
+            (4244, "utility"),
+            # PID reused after the rdd process exited: the last launch wins.
+            (4245, "socket"),
+            # The parent is never launched as a child.
+            (100, None),
+            (None, None),
+        ],
+    )
+    def test_resolves_type_from_log(
+        self, crash_pid: int | None, expected: str | None
+    ) -> None:
+        """Resolve the process type from the ChildProcessLifecycle log."""
+        assert _extract_crash_ptype(crash_pid, self._LIFECYCLE_LOG) == expected
 
 
-@pytest.mark.parametrize(
-    ("parent_pid", "crashdata", "expected"),
-    [
-        (4242, _ASAN_CRASHDATA, True),
-        (9999, _ASAN_CRASHDATA, False),
-        (None, _ASAN_CRASHDATA, False),
-        (4242, "Segmentation fault (core dumped)", False),
-    ],
-)
-def test_crashed_parent(parent_pid: int | None, crashdata: str, expected: bool) -> None:
-    """Verify that _crashed_parent returns True only when PIDs are known and match."""
-    assert _crashed_parent(parent_pid, crashdata) is expected
+class TestCrashedProcessFields:
+    _GPU_LAUNCH_LOG = (
+        "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
+        "++PROCESS [pid = 4243] [childID = 2] [type = gpu]\n"
+    )
+    _GPU_CRASH = "==4243==ERROR: AddressSanitizer: x"
+
+    @pytest.mark.parametrize(
+        ("stderr", "crashdata", "parent_pid", "expected"),
+        [
+            # Child identified from its launch record; other types ruled out.
+            (
+                _GPU_LAUNCH_LOG,
+                _GPU_CRASH,
+                100,
+                {
+                    "crashed_parent": False,
+                    "crashed_gpu": True,
+                    "crashed_content": False,
+                },
+            ),
+            # Parent identified by PID; it has no launch record to type it from.
+            (_GPU_LAUNCH_LOG, "==100==ERROR: x", 100, {"crashed_parent": True}),
+            # No launch record for the crashing PID, e.g. head-truncated stderr.
+            ("", _GPU_CRASH, 100, {"crashed_parent": False, "crashed_gpu": None}),
+            # No ASAN PID marker at all.
+            (_GPU_LAUNCH_LOG, "Segmentation fault", 100, {"crashed_parent": None}),
+            # Parent PID unknown, e.g. a crash during launch.
+            (_GPU_LAUNCH_LOG, _GPU_CRASH, None, {"crashed_parent": None}),
+        ],
+    )
+    def test_flags_none_when_unidentified(
+        self,
+        stderr: str,
+        crashdata: str,
+        parent_pid: int | None,
+        expected: dict[str, bool | None],
+    ) -> None:
+        """An unidentified crashing process is reported as None, not False."""
+        logs = Logs(stderr=stderr, stdout="", crashdata=crashdata)
+        fields = _crashed_process_fields(logs, parent_pid)
+        assert {key: fields[key] for key in expected} == expected
 
 
 class TestIgnoredSignatures:
