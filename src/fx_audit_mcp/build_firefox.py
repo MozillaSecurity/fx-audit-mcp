@@ -5,10 +5,16 @@ import asyncio
 import json
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 from shutil import which
 
+from fastmcp import Context
+
 from .models import BuildResult
+from .process_output import stream_process_output
+
+PROCESS_TERMINATION_TIMEOUT = 5.0
 
 # Root of a mozilla-build installation on Windows; overridable for tests.
 MOZILLA_BUILD_ROOT = Path("C:/mozilla-build")
@@ -113,6 +119,7 @@ async def _get_build_dir(py3: str, firefox_dir: Path, env: dict[str, str]) -> st
 async def build_firefox(
     firefox_dir: Path,
     mozconfig_path: Path,
+    ctx: Context | None = None,
 ) -> BuildResult:
     """Build the Firefox binary needed by browser_evaluator: invokes
     ``mach build`` with the given MOZCONFIG (typically an ASAN fuzzing config)
@@ -125,6 +132,8 @@ async def build_firefox(
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
         mozconfig_path: Path to the MOZCONFIG file controlling build flags
             (e.g. ``./mozconfigs/mozconfig.linux.asan.fuzzing``).
+        ctx: FastMCP request context used to send live output notifications.
+            When absent, output is written directly to stdout/stderr.
 
     Returns:
         BuildResult with ``build_dir`` set to the objdir on success.
@@ -165,10 +174,47 @@ async def build_firefox(
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate()
-        stdout_output = stdout.decode("utf-8", errors="replace") if stdout else ""
-        stderr_output = stderr.decode("utf-8", errors="replace") if stderr else ""
+        notifications_enabled = ctx is not None
 
+        async def emit_output(text: str, stream_name: str) -> None:
+            nonlocal notifications_enabled
+            if ctx is None:
+                destination = sys.stdout if stream_name == "stdout" else sys.stderr
+                print(text, end="", file=destination, flush=True)
+            elif notifications_enabled:
+                try:
+                    await ctx.info(text, logger_name=f"mach.{stream_name}")
+                except Exception:
+                    notifications_enabled = False
+
+        assert process.stdout is not None
+        assert process.stderr is not None
+        try:
+            stdout_output, stderr_output = await stream_process_output(
+                process.stdout,
+                process.stderr,
+                emit_output,
+            )
+        except BaseException:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(
+                        process.wait(),
+                        timeout=PROCESS_TERMINATION_TIMEOUT,
+                    )
+                except TimeoutError:
+                    with suppress(ProcessLookupError):
+                        process.kill()
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(
+                            process.wait(),
+                            timeout=PROCESS_TERMINATION_TIMEOUT,
+                        )
+            raise
+
+        await process.wait()
         if process.returncode == 0:
             return BuildResult(
                 success=True,
@@ -212,10 +258,6 @@ def main() -> None:
     print(f"Message: {result.message}")
     if result.build_dir:
         print(f"Build dir: {result.build_dir}")
-    if result.stdout:
-        print(f"\n--- stdout ---\n{result.stdout}")
-    if result.stderr:
-        print(f"\n--- stderr ---\n{result.stderr}")
 
     sys.exit(0 if result.success else 1)
 

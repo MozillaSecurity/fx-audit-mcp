@@ -1,5 +1,6 @@
 """Tests for build_firefox tool."""
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -15,10 +16,19 @@ from fx_audit_mcp.build_firefox import (
     build_firefox,
     main,
 )
+from fx_audit_mcp.process_output import STREAM_CHUNK_SIZE
 
 bf_module = sys.modules["fx_audit_mcp.build_firefox"]
 
 _DUMMY_OBJDIR = "/tmp/firefox/obj-asan"
+
+
+class _FakeStream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = iter(chunks)
+
+    async def read(self, _size: int) -> bytes:
+        return next(self._chunks, b"")
 
 
 @pytest.fixture(autouse=True)
@@ -83,10 +93,15 @@ async def test_successful_build(mocker: MockerFixture, tmp_path: Path) -> None:
 
     mocker.patch("pathlib.Path.exists", return_value=True)
     mock_process = mocker.AsyncMock()
-    mock_process.returncode = 0
-    mock_process.communicate = mocker.AsyncMock(
-        return_value=(b"Build succeeded\n", b"Warning: something\n")
-    )
+    mock_process.returncode = None
+
+    async def _wait() -> int:
+        mock_process.returncode = 0
+        return 0
+
+    mock_process.wait = _wait
+    mock_process.stdout = _FakeStream([b"Build succeeded\n"])
+    mock_process.stderr = _FakeStream([b"Warning: something\n"])
     mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
 
     result = await build_firefox(firefox_dir, mozconfig)
@@ -107,9 +122,8 @@ async def test_failed_build(mocker: MockerFixture, tmp_path: Path) -> None:
     mocker.patch("pathlib.Path.exists", return_value=True)
     mock_process = mocker.AsyncMock()
     mock_process.returncode = 1
-    mock_process.communicate = mocker.AsyncMock(
-        return_value=(b"Build output\n", b"Error: build failed\n")
-    )
+    mock_process.stdout = _FakeStream([b"Build output\n"])
+    mock_process.stderr = _FakeStream([b"Error: build failed\n"])
     mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
 
     result = await build_firefox(firefox_dir, mozconfig)
@@ -146,6 +160,146 @@ async def test_missing_mozconfig(tmp_path: Path) -> None:
     assert result.success is False
     assert "MOZCONFIG file not found" in result.message
     assert str(mozconfig) in result.message
+
+
+@pytest.mark.anyio
+async def test_long_output_line_is_streamed(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """Output longer than the asyncio pipe limit is retained and streamed."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = 0
+    output = b"x" * (STREAM_CHUNK_SIZE * 2)
+    mock_process.stdout = _FakeStream([output])
+    mock_process.stderr = _FakeStream([])
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+
+    result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig")
+
+    assert result.success is True
+    assert result.stdout == output.decode()
+
+
+@pytest.mark.anyio
+async def test_streams_output_to_context_and_cli(
+    mocker: MockerFixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Streams output through MCP context without writing to MCP stdout."""
+    firefox_dir = tmp_path / "firefox"
+    mozconfig = tmp_path / "mozconfig"
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = 0
+    mock_process.stdout = _FakeStream([b"out line\n"])
+    mock_process.stderr = _FakeStream([b"err line\n"])
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    ctx = mocker.Mock()
+    ctx.info = mocker.AsyncMock()
+
+    result = await build_firefox(firefox_dir, mozconfig, ctx=ctx)
+
+    assert result.success is True
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert ctx.info.await_count == 2
+    ctx.info.assert_any_await("out line\n", logger_name="mach.stdout")
+    ctx.info.assert_any_await("err line\n", logger_name="mach.stderr")
+
+
+@pytest.mark.anyio
+async def test_context_failure_disables_notifications(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """A notification failure does not terminate an otherwise healthy build."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = 0
+    mock_process.stdout = _FakeStream([b"out line\n", b"more\n"])
+    mock_process.stderr = _FakeStream([])
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    ctx = mocker.Mock()
+    ctx.info = mocker.AsyncMock(side_effect=RuntimeError("client disconnected"))
+
+    result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig", ctx=ctx)
+
+    assert result.success is True
+    assert result.stdout == "out line\nmore\n"
+    ctx.info.assert_awaited_once()
+    mock_process.terminate.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_context_cancellation_terminates_build(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """Cancellation from a notification aborts and waits for mach build."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = None
+    mock_process.stdout = _FakeStream([b"out line\n"])
+    mock_process.stderr = _FakeStream([])
+    mock_process.terminate = mocker.Mock()
+    mock_process.wait = mocker.AsyncMock()
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    ctx = mocker.Mock()
+    ctx.info = mocker.AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig", ctx=ctx)
+
+    mock_process.terminate.assert_called_once_with()
+    mock_process.wait.assert_awaited_once_with()
+
+
+@pytest.mark.anyio
+async def test_context_cancellation_kills_stuck_build(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """A stuck process is killed after termination times out."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mocker.patch("fx_audit_mcp.build_firefox.PROCESS_TERMINATION_TIMEOUT", 0.001)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = None
+    mock_process.stdout = _FakeStream([b"out line\n"])
+    mock_process.stderr = _FakeStream([])
+    mock_process.terminate = mocker.Mock()
+    mock_process.kill = mocker.Mock()
+
+    async def _stuck_wait() -> None:
+        await asyncio.sleep(3600)
+
+    mock_process.wait = _stuck_wait
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    ctx = mocker.Mock()
+    ctx.info = mocker.AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig", ctx=ctx)
+
+    mock_process.terminate.assert_called_once_with()
+    mock_process.kill.assert_called_once_with()
+
+
+@pytest.mark.anyio
+async def test_direct_call_prints_output(
+    mocker: MockerFixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Direct calls stream output to the process streams."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = 0
+    mock_process.stdout = _FakeStream([b"out line\n"])
+    mock_process.stderr = _FakeStream([b"err line\n"])
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+
+    result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig")
+
+    assert result.success is True
+    captured = capsys.readouterr()
+    assert captured.out == "out line\n"
+    assert captured.err == "err line\n"
 
 
 class TestWindowsBuildEnv:
@@ -277,7 +431,9 @@ class TestMain:
             main()
         assert exc_info.value.code == 1
 
-    def test_exits_zero_on_success(self, mocker: MockerFixture, tmp_path: Path) -> None:
+    def test_exits_zero_on_success(
+        self, mocker: MockerFixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """main() exits 0 when build succeeds."""
         mc = tmp_path / "mc"
         mc.touch()
@@ -294,8 +450,8 @@ class TestMain:
         result_obj: MagicMock = mocker.MagicMock(
             success=True,
             build_dir="/path/to/obj",
-            stdout=None,
-            stderr=None,
+            stdout="out",
+            stderr="err",
             message="ok",
         )
 
@@ -308,6 +464,9 @@ class TestMain:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
+        output = capsys.readouterr().out
+        assert "--- stdout ---" not in output
+        assert "--- stderr ---" not in output
 
 
 @pytest.mark.anyio
@@ -324,7 +483,8 @@ async def test_strips_taskcluster_env(
 
     mock_process = mocker.AsyncMock()
     mock_process.returncode = 0
-    mock_process.communicate = mocker.AsyncMock(return_value=(b"", b""))
+    mock_process.stdout = _FakeStream([])
+    mock_process.stderr = _FakeStream([])
     create = mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
 
     await build_firefox(firefox_dir, mozconfig)
@@ -346,7 +506,8 @@ async def test_calls_windows_build_env_on_win32(
     helper: MagicMock = mocker.patch("fx_audit_mcp.build_firefox._windows_build_env")
     mock_process = mocker.AsyncMock()
     mock_process.returncode = 0
-    mock_process.communicate = mocker.AsyncMock(return_value=(b"", b""))
+    mock_process.stdout = _FakeStream([])
+    mock_process.stderr = _FakeStream([])
     mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
 
     await build_firefox(firefox_dir, mozconfig)
