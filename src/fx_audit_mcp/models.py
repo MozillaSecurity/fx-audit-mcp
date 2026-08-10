@@ -44,6 +44,36 @@ class BrowserCrashInfo(ToolModel):
         description="True if the crash occurred in the parent process.",
         examples=[True, False],
     )
+    crashed_content: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in a content ('tab') process.",
+        examples=[True, False],
+    )
+    crashed_gpu: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in the GPU process.",
+        examples=[True, False],
+    )
+    crashed_rdd: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in the RDD (media decode) process.",
+        examples=[True, False],
+    )
+    crashed_gmp: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in a GMP (Gecko Media Plugin) process.",
+        examples=[True, False],
+    )
+    crashed_socket: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in the socket process.",
+        examples=[True, False],
+    )
+    crashed_utility: bool | None = Field(
+        default=None,
+        description="True if the crash occurred in a utility process.",
+        examples=[True, False],
+    )
     files: dict[str, str] | None = Field(
         default=None,
         description=(
