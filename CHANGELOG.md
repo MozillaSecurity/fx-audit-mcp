@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.1 (2026-08-12)
+
+### Bug Fixes
+
+- **browser_evaluator**: Report child flags as False when the parent crashed
+  ([`e09ad75`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e09ad757da47a2b2fb006c4af832db00ef535c72))
+
+
 ## v1.4.0 (2026-08-12)
 
 ### Features
