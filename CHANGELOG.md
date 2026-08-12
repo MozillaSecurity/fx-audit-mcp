@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-08-12)
+
+### Features
+
+- **browser_evaluator**: Add process types to crash info
+  ([`5ea2d3a`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/5ea2d3a200e21881b950a617a92bb894dbc318ce))
+
+
 ## v1.3.0 (2026-07-30)
 
 ### Features
