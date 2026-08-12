@@ -113,22 +113,33 @@ def _crashed_process_fields(
         parent_pid: PID of the Firefox parent process, or None if unknown.
 
     Returns:
-        The BrowserCrashInfo process flags. A flag is None when the crashing
-        process cannot be identified - crashdata carries no ASAN PID marker,
-        or no launch record for that PID survives in stderr - so an unresolved
-        crash is not reported as having happened in none of these processes.
+        The BrowserCrashInfo process flags. A parent crash reports every child
+        process flag as False. A flag is None when the crashing process cannot
+        be identified - crashdata carries no ASAN PID marker, or no launch
+        record for that PID survives in stderr - so an unresolved crash is not
+        reported as having happened in none of these processes.
     """
     crash_pid = _extract_crash_pid(logs.crashdata)
     crash_ptype = _extract_crash_ptype(crash_pid, logs.stderr)
-    return {
-        "crashed_parent": crash_pid == parent_pid if crash_pid and parent_pid else None,
-        "crashed_content": crash_ptype == "tab" if crash_ptype else None,
-        "crashed_gpu": crash_ptype == "gpu" if crash_ptype else None,
-        "crashed_rdd": crash_ptype == "rdd" if crash_ptype else None,
-        "crashed_gmp": crash_ptype == "gmplugin" if crash_ptype else None,
-        "crashed_socket": crash_ptype == "socket" if crash_ptype else None,
-        "crashed_utility": crash_ptype == "utility" if crash_ptype else None,
+
+    process_fields: dict[str, bool | None] = {
+        "crashed_parent": crash_pid == parent_pid if crash_pid and parent_pid else None
     }
+    for name, ptype in (
+        ("crashed_content", "tab"),
+        ("crashed_gpu", "gpu"),
+        ("crashed_rdd", "rdd"),
+        ("crashed_gmp", "gmplugin"),
+        ("crashed_socket", "socket"),
+        ("crashed_utility", "utility"),
+    ):
+        process_fields[name] = (
+            crash_ptype == ptype
+            if (crash_ptype or process_fields["crashed_parent"])
+            else None
+        )
+
+    return process_fields
 
 
 def _collect_dump_files(dump_dir: Path) -> dict[str, str]:
