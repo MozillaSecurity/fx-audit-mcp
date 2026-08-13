@@ -180,7 +180,10 @@ async def build_firefox(
             nonlocal notifications_enabled
             if ctx is None:
                 destination = sys.stdout if stream_name == "stdout" else sys.stderr
-                print(text, end="", file=destination, flush=True)
+                try:
+                    print(text, end="", file=destination, flush=True)
+                except (BrokenPipeError, UnicodeEncodeError):
+                    notifications_enabled = False
             elif notifications_enabled:
                 try:
                     await ctx.info(text, logger_name=f"mach.{stream_name}")

@@ -135,6 +135,29 @@ async def test_failed_build(mocker: MockerFixture, tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error", [BrokenPipeError(), UnicodeEncodeError("utf-8", "x", 0, 1, "test")]
+)
+async def test_cli_output_error_does_not_abort_build(
+    mocker: MockerFixture, tmp_path: Path, error: Exception
+) -> None:
+    """A CLI output error does not terminate an otherwise healthy build."""
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mock_process = mocker.AsyncMock()
+    mock_process.returncode = 0
+    mock_process.stdout = _FakeStream([b"out line\n", b"more\n"])
+    mock_process.stderr = _FakeStream([])
+    mocker.patch("asyncio.create_subprocess_exec", return_value=mock_process)
+    output = mocker.Mock()
+    output.write.side_effect = error
+    mocker.patch.object(bf_module.sys, "stdout", output)
+
+    result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig")
+
+    assert result.success is True
+
+
+@pytest.mark.anyio
 async def test_missing_firefox_directory(tmp_path: Path) -> None:
     """Missing Firefox directory returns error without calling subprocess."""
     firefox_dir = tmp_path / "nonexistent"
