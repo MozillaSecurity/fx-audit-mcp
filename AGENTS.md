@@ -15,6 +15,7 @@ src/fx_audit_mcp/          # Main package
   nss_gtest_evaluator.py       # Run NSS GTest under ASAN
   build_firefox.py             # Build Firefox with mach build
   build_nss.py                 # Build NSS with ASAN
+  process_output.py            # Stream subprocess stdout/stderr concurrently
   ignored_signatures/          # FuzzManager crash signatures to suppress
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
@@ -24,6 +25,7 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   test_build_nss.py
   test_js_shell_evaluator.py
   test_nss_gtest_evaluator.py
+  test_process_output.py
 ```
 
 ## Key Design Patterns
@@ -38,6 +40,9 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   Do not wrap tool bodies in catch-all `try/except Exception` blocks.
 - Crash detection via sanitizer output is always on stderr; logs are
   tail-truncated to `MAX_LOG_SIZE` (1 MiB) to avoid overwhelming LLM context.
+- Long-running tools should stream subprocess output through `ctx` when a
+  request context is available and capture the output for their return model;
+  without a context, they should write output directly to stdout/stderr.
 - `browser_evaluator` loads `ignored_signatures/*.json` (FuzzManager format) at
   call time to suppress common noise crashes (e.g. shutdown hangs).
 - The execution tools (browser/JS shell/NSS gtest/Firefox/NSS build) are also
