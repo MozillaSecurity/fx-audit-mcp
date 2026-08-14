@@ -13,8 +13,8 @@ from fx_audit_mcp.browser_evaluator import (
     _check_pref_blocklist,
     _collect_dump_files,
     _crashed_process_fields,
-    _extract_crash_pid,
-    _extract_crash_ptype,
+    _extract_child_ptypes,
+    _extract_crash_pids,
     _load_ignored_signatures,
     _load_pref_blocklist,
     browser_evaluator,
@@ -26,20 +26,20 @@ from fx_audit_mcp.models import Logs
 be_module = sys.modules["fx_audit_mcp.browser_evaluator"]
 
 
-class TestExtractCrashPid:
+class TestExtractCrashPids:
     def test_standard_asan_format(self) -> None:
         """Parse a PID from a standard ASAN error header."""
         crashdata = "==12345==ERROR: AddressSanitizer: heap-use-after-free"
-        assert _extract_crash_pid(crashdata) == 12345
+        assert _extract_crash_pids(crashdata) == [12345]
 
-    def test_returns_none_when_no_match(self) -> None:
-        """Return None when the input contains no ASAN PID marker."""
-        assert _extract_crash_pid("no pid here") is None
+    def test_returns_empty_when_no_match(self) -> None:
+        """Return an empty list when the input contains no ASAN PID marker."""
+        assert not _extract_crash_pids("no pid here")
 
-    def test_extracts_first_match(self) -> None:
-        """Return the PID from the first ASAN marker when multiple are present."""
-        crashdata = "==111==ERROR: AddressSanitizer: ...\n==222==ERROR: something"
-        assert _extract_crash_pid(crashdata) == 111
+    def test_extracts_all_matches_in_order(self) -> None:
+        """Return every crashing PID in the order the reports appear."""
+        crashdata = "==111==ERROR: AddressSanitizer: ...\n==222==ERROR: something\n"
+        assert _extract_crash_pids(crashdata) == [111, 222]
 
 
 class TestReadGrizzlyLogs:
@@ -217,7 +217,7 @@ class TestCollectDumpFiles:
         assert "�" in files["binary.bin"]
 
 
-class TestExtractCrashPtype:
+class TestExtractChildPtypes:
     _PREFIX = "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
     _LIFECYCLE_LOG = (
         f"{_PREFIX}++PROCESS [pid = 4242] [childID = 1] [type = tab]\n"
@@ -229,31 +229,46 @@ class TestExtractCrashPtype:
     )
 
     @pytest.mark.parametrize(
-        ("crash_pid", "expected"),
+        ("stderr", "expected"),
         [
-            (4242, "tab"),
-            (4243, "gpu"),
-            (4244, "utility"),
-            # PID reused after the rdd process exited: the last launch wins.
-            (4245, "socket"),
-            # The parent is never launched as a child.
-            (100, None),
-            (None, None),
+            (
+                _LIFECYCLE_LOG,
+                {
+                    4242: "tab",
+                    4243: "gpu",
+                    4244: "utility",
+                    # PID reused after the rdd process exited: last launch wins.
+                    4245: "socket",
+                },
+            ),
+            # Nothing to map: no launch records, e.g. tail-truncated stderr. The
+            # parent (pid 100) is never launched as a child, so it never appears.
+            ("[Parent 100: Main Thread]: I/console some unrelated output\n", {}),
         ],
     )
-    def test_resolves_type_from_log(
-        self, crash_pid: int | None, expected: str | None
-    ) -> None:
-        """Resolve the process type from the ChildProcessLifecycle log."""
-        assert _extract_crash_ptype(crash_pid, self._LIFECYCLE_LOG) == expected
+    def test_maps_pids_to_types(self, stderr: str, expected: dict[int, str]) -> None:
+        """Map launched child PIDs to their ChildProcessLifecycle types."""
+        assert _extract_child_ptypes(stderr) == expected
 
 
 class TestCrashedProcessFields:
+    _PARENT_PID = 100
+    _PARENT_CRASH_LOG = "==100==ERROR: AddressSanitizer: heap-use-after-free\n"
+    _TAB_LAUNCH_LOG = (
+        "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
+        "++PROCESS [pid = 4242] [childID = 1] [type = tab]\n"
+    )
+    _TAB_CRASH_LOG = "==4242==ERROR: AddressSanitizer: heap-use-after-free\n"
     _GPU_LAUNCH_LOG = (
         "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
         "++PROCESS [pid = 4243] [childID = 2] [type = gpu]\n"
     )
-    _GPU_CRASH = "==4243==ERROR: AddressSanitizer: x"
+    _GPU_CRASH_LOG = "==4243==ERROR: AddressSanitizer: heap-use-after-free\n"
+    _SECOND_TAB_LAUNCH_LOG = (
+        "[Parent 100: Main Thread]: I/ChildProcessLifecycle "
+        "++PROCESS [pid = 4244] [childID = 3] [type = tab]\n"
+    )
+    _SECOND_TAB_CRASH_LOG = "==4244==ERROR: AddressSanitizer: heap-use-after-free\n"
 
     @pytest.mark.parametrize(
         ("stderr", "crashdata", "parent_pid", "expected"),
@@ -261,8 +276,8 @@ class TestCrashedProcessFields:
             # Child identified from its launch record; other types ruled out.
             (
                 _GPU_LAUNCH_LOG,
-                _GPU_CRASH,
-                100,
+                _GPU_CRASH_LOG,
+                _PARENT_PID,
                 {
                     "crashed_parent": False,
                     "crashed_gpu": True,
@@ -270,23 +285,73 @@ class TestCrashedProcessFields:
                 },
             ),
             # Parent identified by PID; it has no launch record to type it from.
-            (_GPU_LAUNCH_LOG, "==100==ERROR: x", 100, {"crashed_parent": True}),
-            # No launch record for the crashing PID, e.g. head-truncated stderr.
-            ("", _GPU_CRASH, 100, {"crashed_parent": False, "crashed_gpu": None}),
+            (
+                _GPU_LAUNCH_LOG,
+                _PARENT_CRASH_LOG,
+                _PARENT_PID,
+                {"crashed_parent": True},
+            ),
+            # Several processes crashed in one run: every one of them is flagged.
+            (
+                _GPU_LAUNCH_LOG + _TAB_LAUNCH_LOG,
+                _GPU_CRASH_LOG + _TAB_CRASH_LOG + _PARENT_CRASH_LOG,
+                _PARENT_PID,
+                {
+                    "crashed_parent": True,
+                    "crashed_gpu": True,
+                    "crashed_content": True,
+                    "crashed_rdd": False,
+                },
+            ),
+            # No launch record for the crashing PID, e.g. tail-truncated stderr.
+            (
+                "",
+                _GPU_CRASH_LOG,
+                _PARENT_PID,
+                {"crashed_parent": False, "crashed_gpu": None},
+            ),
+            # An unattributable PID alongside the parent still rules nothing out.
+            (
+                _GPU_LAUNCH_LOG,
+                _PARENT_CRASH_LOG + "==9999==ERROR: AddressSanitizer: SEGV\n",
+                _PARENT_PID,
+                {"crashed_parent": True, "crashed_gpu": None},
+            ),
+            # Two crashes of the same type collapse into one flag, not into None.
+            (
+                _TAB_LAUNCH_LOG + _SECOND_TAB_LAUNCH_LOG,
+                _TAB_CRASH_LOG + _SECOND_TAB_CRASH_LOG,
+                _PARENT_PID,
+                {
+                    "crashed_parent": False,
+                    "crashed_content": True,
+                    "crashed_gpu": False,
+                },
+            ),
             # No ASAN PID marker at all.
-            (_GPU_LAUNCH_LOG, "Segmentation fault", 100, {"crashed_parent": None}),
+            (
+                _GPU_LAUNCH_LOG,
+                "Segmentation fault",
+                _PARENT_PID,
+                {"crashed_parent": None, "crashed_gpu": None},
+            ),
             # Parent PID unknown, e.g. a crash during launch.
-            (_GPU_LAUNCH_LOG, _GPU_CRASH, None, {"crashed_parent": None}),
+            (
+                _GPU_LAUNCH_LOG,
+                _GPU_CRASH_LOG,
+                None,
+                {"crashed_parent": None, "crashed_gpu": True},
+            ),
         ],
     )
-    def test_flags_none_when_unidentified(
+    def test_flags_each_crashed_process(
         self,
         stderr: str,
         crashdata: str,
         parent_pid: int | None,
         expected: dict[str, bool | None],
     ) -> None:
-        """An unidentified crashing process is reported as None, not False."""
+        """Flag every crashed process; report an unidentified one as None."""
         logs = Logs(stderr=stderr, stdout="", crashdata=crashdata)
         fields = _crashed_process_fields(logs, parent_pid)
         assert {key: fields[key] for key in expected} == expected

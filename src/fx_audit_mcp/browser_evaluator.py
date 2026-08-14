@@ -30,6 +30,14 @@ _USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
 _CHILD_LAUNCH_RE = re.compile(
     r"\+\+PROCESS \[pid = (\d+)\] \[childID = \d+\] \[type = (.*)\]"
 )
+_PTYPE_TO_FIELD_MAP: dict[str, str] = {
+    "tab": "crashed_content",
+    "gpu": "crashed_gpu",
+    "rdd": "crashed_rdd",
+    "gmplugin": "crashed_gmp",
+    "socket": "crashed_socket",
+    "utility": "crashed_utility",
+}
 
 # Suppress grizzly's verbose logging (but allow CRITICAL and ERROR)
 getLogger("grizzly").setLevel(ERROR)
@@ -61,45 +69,38 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
             self.parent_pid = self._puppet.get_pid()
 
 
-def _extract_crash_pid(crashdata: str) -> int | None:
-    """Extract the crashing process PID from ASAN output.
+def _extract_crash_pids(crashdata: str) -> list[int]:
+    """Extract the PIDs of all crashing processes from ASAN output.
 
     Args:
         crashdata: ASAN crash output.
 
     Returns:
-        PID of the crashing process, or None if no ASAN PID marker is present.
+        PIDs of the crashing processes, in report order. Empty if no ASAN PID
+        marker is present.
     """
-    # ASAN format: ==PID==ERROR: AddressSanitizer: ...
-    match = re.search(r"==(\d+)==ERROR:", crashdata)
-    if match:
-        return int(match.group(1))
-    return None
+    return [int(match.group(1)) for match in re.finditer(r"==(\d+)==ERROR:", crashdata)]
 
 
-def _extract_crash_ptype(crash_pid: int | None, stderr: str) -> str | None:
-    """Extract the GeckoProcessType of the crashing child process.
+def _extract_child_ptypes(stderr: str) -> dict[int, str]:
+    """Map each launched child PID to its GeckoProcessType.
 
-    Looks up *crash_pid* in the ChildProcessLifecycle log the parent writes to
-    stderr (enabled via the MOZ_LOG modules set by browser_evaluator).
+    Reads the ChildProcessLifecycle log the parent writes to stderr (enabled
+    via the MOZ_LOG modules set by browser_evaluator). A PID that carries no
+    launch record is absent from the mapping - the parent is never launched as
+    a child, and tail-truncated stderr can drop an early record entirely.
 
     Args:
-        crash_pid: PID of the crashing process, as reported by ASAN.
         stderr: Process stderr captured during the run.
 
     Returns:
-        Process type of the crashing child (e.g. "tab", "gpu"), or None when
-        the PID is unknown or was not launched as a child process (e.g. the
-        parent).
+        Mapping of child PID to process type (e.g. "tab", "gpu"). A PID can be
+        reused, so the last launch wins.
     """
-    if crash_pid is None:
-        return None
-    # A PID can be reused, so the last launch wins.
-    process_type = None
-    for match in _CHILD_LAUNCH_RE.finditer(stderr):
-        if int(match.group(1)) == crash_pid:
-            process_type = match.group(2)
-    return process_type
+    return {
+        int(match.group(1)): match.group(2)
+        for match in _CHILD_LAUNCH_RE.finditer(stderr)
+    }
 
 
 def _crashed_process_fields(
@@ -108,38 +109,52 @@ def _crashed_process_fields(
     """Determine which process a crash occurred in.
 
     Args:
-        logs: Logs captured for the crash. The ASAN PID is read from crashdata
+        logs: Logs captured for the crash. The ASAN PIDs are read from crashdata
             and resolved against the ChildProcessLifecycle records in stderr.
         parent_pid: PID of the Firefox parent process, or None if unknown.
 
     Returns:
-        The BrowserCrashInfo process flags. A parent crash reports every child
-        process flag as False. A flag is None when the crashing process cannot
-        be identified - crashdata carries no ASAN PID marker, or no launch
-        record for that PID survives in stderr - so an unresolved crash is not
-        reported as having happened in none of these processes.
+        The BrowserCrashInfo process flags. Multiple processes can crash in a
+        single run, so more than one flag can be True. A parent-only crash
+        reports every child process flag as False. Child flags are only False
+        once every crashing PID has been attributed: any PID that is neither
+        the parent nor carries a launch record in stderr leaves the
+        unidentified child flags None, so an unresolved crash is not reported
+        as having happened in none of these processes. When crashdata carries
+        no ASAN PID marker at all, every flag is None.
     """
-    crash_pid = _extract_crash_pid(logs.crashdata)
-    crash_ptype = _extract_crash_ptype(crash_pid, logs.stderr)
+    crash_pids = _extract_crash_pids(logs.crashdata)
+    if not crash_pids:
+        return dict.fromkeys(("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), None)
 
-    process_fields: dict[str, bool | None] = {
-        "crashed_parent": crash_pid == parent_pid if crash_pid and parent_pid else None
-    }
-    for name, ptype in (
-        ("crashed_content", "tab"),
-        ("crashed_gpu", "gpu"),
-        ("crashed_rdd", "rdd"),
-        ("crashed_gmp", "gmplugin"),
-        ("crashed_socket", "socket"),
-        ("crashed_utility", "utility"),
-    ):
-        process_fields[name] = (
-            crash_ptype == ptype
-            if (crash_ptype or process_fields["crashed_parent"])
-            else None
-        )
+    pfields: dict[str, bool | None] = dict.fromkeys(
+        ("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), False
+    )
+    if parent_pid is None:
+        pfields["crashed_parent"] = None
 
-    return process_fields
+    child_ptypes = _extract_child_ptypes(logs.stderr)
+    for crash_pid in crash_pids:
+        if crash_pid == parent_pid:
+            pfields["crashed_parent"] = True
+            continue
+
+        crash_ptype = child_ptypes.get(crash_pid)
+        if pfield_name := _PTYPE_TO_FIELD_MAP.get(crash_ptype or ""):
+            pfields[pfield_name] = True
+            continue
+
+        # Resolved type without a flag of its own (e.g. "vr", "forkserver"):
+        # not reportable, but it still rules the tracked types out.
+        if crash_ptype:
+            continue
+
+        # Unattributable PID: keep what was positively identified, but reset
+        # the other child flags to None rather than ruling them out.
+        for pfield_name in _PTYPE_TO_FIELD_MAP.values():
+            pfields[pfield_name] = pfields[pfield_name] or None
+
+    return pfields
 
 
 def _collect_dump_files(dump_dir: Path) -> dict[str, str]:
