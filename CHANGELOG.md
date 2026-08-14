@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.2 (2026-08-14)
+
+### Bug Fixes
+
+- **browser_evaluator**: Flag every crashed process, not just the first
+  ([`a5100b0`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/a5100b01f8a2ec1f24b60f97eb569b129df20097))
+
+
 ## v1.4.1 (2026-08-12)
 
 ### Bug Fixes
