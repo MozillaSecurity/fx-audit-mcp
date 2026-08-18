@@ -6,10 +6,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from grizzly.common import storage as grizzly_storage
+from grizzly.common import utils as grizzly_utils
 
 from fx_audit_mcp.browser_evaluator import (
     MAX_LOG_SIZE,
     PREF_BLOCKLIST_ENV,
+    _build_testcase,
     _check_pref_blocklist,
     _collect_dump_files,
     _crashed_process_fields,
@@ -132,6 +135,178 @@ class TestLoadPrefBlocklist:
             _load_pref_blocklist()
 
 
+class TestBuildTestcase:
+    @staticmethod
+    def _write(directory: Path, name: str, data: bytes) -> Path:
+        """Write *data* to *name* under *directory* and return the path."""
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def test_single_file(self, tmp_path: Path) -> None:
+        """A lone entry point file is added and marked required."""
+        src = self._write(tmp_path, "test.html", b"<html></html>")
+        testcase = _build_testcase({"test.html": src}, "test.html")
+        try:
+            assert list(testcase.required) == ["test.html"]
+            assert not list(testcase.optional)
+        finally:
+            testcase.cleanup()
+
+    def test_entry_point_required_others_optional(self, tmp_path: Path) -> None:
+        """The entry point is required; every other file is optional."""
+        testcase = _build_testcase(
+            {
+                "test.html": self._write(tmp_path, "test.html", b"<html></html>"),
+                "worker.js": self._write(tmp_path, "worker.js", b"postMessage(1)"),
+                "style.css": self._write(tmp_path, "style.css", b"body{}"),
+            },
+            "test.html",
+        )
+        out = tmp_path / "dump"
+        try:
+            assert list(testcase.required) == ["test.html"]
+            assert sorted(testcase.optional) == ["style.css", "worker.js"]
+            testcase.dump(out)
+        finally:
+            testcase.cleanup()
+
+        assert (out / "worker.js").read_bytes() == b"postMessage(1)"
+        assert (out / "style.css").read_bytes() == b"body{}"
+
+    def test_binary_file_is_preserved(self, tmp_path: Path) -> None:
+        """A non-UTF-8 source file round-trips byte-exact into the testcase."""
+        blob = b"\x89PNG\r\n\x1a\n\xff\xfe\x00"
+        testcase = _build_testcase(
+            {
+                "test.html": self._write(tmp_path, "test.html", b"<img src='x.png'>"),
+                "x.png": self._write(tmp_path, "x.png", blob),
+            },
+            "test.html",
+        )
+        out = tmp_path / "dump"
+        try:
+            testcase.dump(out)
+        finally:
+            testcase.cleanup()
+
+        assert (out / "x.png").read_bytes() == blob
+
+    def test_source_files_are_not_consumed(self, tmp_path: Path) -> None:
+        """Source files are copied, so the caller's originals survive."""
+        html = self._write(tmp_path, "test.html", b"<html></html>")
+        png = self._write(tmp_path, "x.png", b"\x89PNG")
+        testcase = _build_testcase({"test.html": html, "x.png": png}, "test.html")
+        testcase.cleanup()
+
+        assert html.read_bytes() == b"<html></html>"
+        assert png.read_bytes() == b"\x89PNG"
+
+    def test_nested_name_creates_subdirectory(self, tmp_path: Path) -> None:
+        """A forward-slash testcase name is written into a subdirectory."""
+        testcase = _build_testcase(
+            {
+                "test.html": self._write(tmp_path, "test.html", b"<html></html>"),
+                "sub/frame.html": self._write(tmp_path, "frame.html", b"<h1>f</h1>"),
+            },
+            "test.html",
+        )
+        out = tmp_path / "dump"
+        try:
+            testcase.dump(out)
+        finally:
+            testcase.cleanup()
+
+        assert (out / "sub" / "frame.html").read_bytes() == b"<h1>f</h1>"
+
+    def test_missing_source_file_raises(self, tmp_path: Path) -> None:
+        """A source path that does not exist is reported."""
+        with pytest.raises(FileNotFoundError):
+            _build_testcase({"test.html": tmp_path / "absent.html"}, "test.html")
+
+    def test_missing_entry_point_raises(self, tmp_path: Path) -> None:
+        """An entry point absent from file_paths is rejected."""
+        src = self._write(tmp_path, "other.js", b"x")
+        with pytest.raises(ValueError, match=r"'test\.html' not found in file_paths"):
+            _build_testcase({"other.js": src}, "test.html")
+
+    def test_empty_mapping_raises(self) -> None:
+        """An empty mapping cannot satisfy the entry point."""
+        with pytest.raises(ValueError, match="not found in file_paths"):
+            _build_testcase({}, "test.html")
+
+    def test_entry_point_is_sanitized_before_matching(self, tmp_path: Path) -> None:
+        """An absolute-looking entry point still matches its relative name."""
+        src = self._write(tmp_path, "test.html", b"<html></html>")
+        testcase = _build_testcase({"test.html": src}, "/test.html")
+        try:
+            assert list(testcase.required) == ["test.html"]
+        finally:
+            testcase.cleanup()
+
+    def test_colliding_names_raise(self, tmp_path: Path) -> None:
+        """Two testcase names that normalize to the same path are rejected."""
+        with pytest.raises(grizzly_storage.TestFileExists, match=r"'a\.js' exists"):
+            _build_testcase(
+                {
+                    "test.html": self._write(tmp_path, "test.html", b"<html>"),
+                    "a.js": self._write(tmp_path, "a.js", b"x"),
+                    "./a.js": self._write(tmp_path, "b.js", b"y"),
+                },
+                "test.html",
+            )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../evil.js",  # escapes the testcase root
+            "a/../../b.js",  # escapes after normalization
+            "sub/",  # missing filename
+            "C:\\evil.js",  # drive letter
+        ],
+    )
+    def test_invalid_name_raises(self, name: str, tmp_path: Path) -> None:
+        """Testcase names that escape the root or are malformed are rejected."""
+        src = self._write(tmp_path, "src.js", b"x")
+        with pytest.raises(ValueError, match="invalid path"):
+            _build_testcase(
+                {"test.html": self._write(tmp_path, "test.html", b"<html>"), name: src},
+                "test.html",
+            )
+
+    def test_rejected_input_leaves_no_temp_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rejected input does not leak the testcase temp directory."""
+        # TestCase roots are created under grizzly's own GRZ_TMP, not tmp_path;
+        # redirect it so the check is isolated from other grizzly processes.
+        storage = tmp_path / "grz"
+        monkeypatch.setattr(grizzly_utils, "GRZ_TMP", storage)
+        src = self._write(tmp_path, "other.js", b"x")
+        with pytest.raises(ValueError, match="not found in file_paths"):
+            _build_testcase({"other.js": src}, "test.html")
+        assert not list((storage / "storage").iterdir())
+
+    def test_leading_slash_is_stripped(self, tmp_path: Path) -> None:
+        """An absolute-looking testcase name is normalized to a relative path."""
+        testcase = _build_testcase(
+            {
+                "test.html": self._write(tmp_path, "test.html", b"<html></html>"),
+                "/a.js": self._write(tmp_path, "a.js", b"x"),
+            },
+            "test.html",
+        )
+        out = tmp_path / "dump"
+        try:
+            assert list(testcase.optional) == ["a.js"]
+            testcase.dump(out)
+        finally:
+            testcase.cleanup()
+
+        assert (out / "a.js").read_bytes() == b"x"
+
+
 class TestPackageTestcase:
     def test_packages_files_prefs_and_env(self, tmp_path: Path) -> None:
         """Package a multi-file testcase with custom prefs and env vars."""
@@ -184,8 +359,8 @@ class TestBrowserEvaluator:
         """Verify that a missing firefox binary raises FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="Firefox binary not found"):
             await browser_evaluator(
-                content="<html></html>",
-                filename="test.html",
+                file_paths={"test.html": tmp_path / "test.html"},
+                entry_point="test.html",
                 firefox_binary=tmp_path / "no_firefox",
             )
 

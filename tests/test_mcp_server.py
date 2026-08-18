@@ -54,6 +54,20 @@ class TestBrowserEvaluatorSchema:
         assert param["default"] is False
         assert param["description"]
 
+    @pytest.mark.anyio
+    async def test_file_paths_and_entry_point_are_required(self) -> None:
+        """Testcase files are a required name -> source path map."""
+        tool = await mcp.get_tool("browser_evaluator")
+        assert tool is not None
+        schema = tool.to_mcp_tool().model_dump()["inputSchema"]
+        assert {"file_paths", "entry_point"} <= set(schema["required"])
+        param = schema["properties"]["file_paths"]
+        assert param["type"] == "object"
+        assert param["additionalProperties"]["format"] == "path"
+        assert param["description"]
+        assert schema["properties"]["entry_point"]["type"] == "string"
+        assert schema["properties"]["entry_point"]["description"]
+
 
 def test_keyboard_interrupt_exits_zero(mocker: MockerFixture) -> None:
     """KeyboardInterrupt causes main() to exit 0."""
