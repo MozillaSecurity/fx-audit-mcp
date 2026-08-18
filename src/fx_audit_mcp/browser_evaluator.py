@@ -248,6 +248,44 @@ def _load_pref_blocklist() -> list[str]:
     ]
 
 
+def _build_testcase(file_paths: dict[str, Path], entry_point: str) -> TestCase:
+    """Build a grizzly TestCase from files on disk.
+
+    Args:
+        file_paths: Mapping of the name a file should have in the testcase
+            (relative to the testcase root, forward slashes for
+            subdirectories) to the source file's path on disk.
+        entry_point: Name of the file in *file_paths* the browser loads first.
+
+    Returns:
+        TestCase containing every file, with the entry point marked required.
+    """
+    testcase = TestCase(
+        entry_point=entry_point,
+        adapter_name="fx-audit",
+        input_fname=entry_point,
+    )
+    try:
+        for name, src in file_paths.items():
+            # Compare sanitized paths: grizzly normalizes both, so a caller
+            # passing "/test.html" still matches the "test.html" key.
+            is_entry = TestCase.sanitize_path(name) == testcase.entry_point
+            # copy: grizzly moves by default, which would consume the
+            # caller's source files.
+            testcase.add_from_file(src, file_name=name, required=is_entry, copy=True)
+        if testcase.entry_point not in testcase:
+            raise ValueError(
+                f"entry_point '{entry_point}' not found in file_paths: "
+                f"{sorted(file_paths)}"
+            )
+    except Exception:
+        # TestCase allocates a temp directory on creation; drop it before the
+        # rejected input propagates to the caller.
+        testcase.cleanup()
+        raise
+    return testcase
+
+
 def read_grizzly_logs(log_dir: Path) -> Logs:
     """Categorize log_*.txt files in *log_dir* into stderr/stdout/crashdata.
 
@@ -346,8 +384,8 @@ async def package_testcase(
 
 
 async def browser_evaluator(  # pragma: no cover
-    content: str,
-    filename: str,
+    file_paths: dict[str, Path],
+    entry_point: str,
     firefox_binary: Path,
     timeout: int = 30,
     prefs: dict[str, str | int | bool] | None = None,
@@ -383,9 +421,15 @@ async def browser_evaluator(  # pragma: no cover
     returned alongside the logs.
 
     Args:
-        content: Testcase file contents as a string, not a path on disk.
-        filename: Filename to give the testcase when written to disk; controls
-            the extension Firefox uses to dispatch the file.
+        file_paths: Testcase files, as a mapping of the name each file should
+            have in the testcase to its path on disk. Use forward slashes for
+            subdirectories (e.g. ``sub/frame.html``). Source files are copied,
+            not moved. Binary files (images, fonts, media) are supported. A
+            name escaping the testcase root raises ValueError; a missing
+            source file raises FileNotFoundError.
+        entry_point: Filename within ``file_paths`` that the browser loads
+            first; must be present in ``file_paths``, and its extension
+            controls how Firefox dispatches the file.
         firefox_binary: Absolute path to the Firefox binary.
         timeout: Per-run timeout in seconds before closing the browser.
         prefs: Optional custom Firefox prefs to layer on top of the prefpicker
@@ -398,14 +442,7 @@ async def browser_evaluator(  # pragma: no cover
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
 
-    testcase = TestCase(
-        entry_point=filename,
-        adapter_name="fx-audit",
-        input_fname=filename,
-    )
-
-    # Add testcase content from bytes (creates temp file internally)
-    testcase.add_from_bytes(content.encode("utf-8"), filename, required=True)
+    testcase = _build_testcase(file_paths, entry_point)
 
     # Use our custom target to capture parent PID
     # xvfb is only available on Linux; use default display mode on other platforms

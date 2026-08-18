@@ -9,7 +9,7 @@ Pydantic return types suitable for use with LLM agent frameworks.
 
 | Tool | Description |
 |------|-------------|
-| `browser_evaluator` | Run a testcase in ASAN Firefox via grizzly replay, detect crashes |
+| `browser_evaluator` | Run a multi-file testcase in ASAN Firefox via grizzly replay, detect crashes |
 | `package_testcase` | Bundle a testcase directory with prefs and env into a grizzly TestCase |
 | `js_shell_evaluator` | Run a JS testcase in the SpiderMonkey shell, detect crashes and sanitizer output |
 | `nss_gtest_evaluator` | Run an NSS GTest and report any ASan crash |
@@ -43,8 +43,15 @@ from fx_audit_mcp import browser_evaluator, js_shell_evaluator
 
 async def main():
     result = await browser_evaluator(
-        content="<script>crashMe()</script>",
-        filename="test.html",
+        # Maps the name each file takes in the testcase to its path on disk,
+        # so testcases may span several files and include binary assets.
+        # Use forward slashes for subdirectories ("sub/frame.html").
+        file_paths={
+            "test.html": Path("/repro/test.html"),
+            "boom.js": Path("/repro/boom.js"),
+            "font.woff2": Path("/repro/font.woff2"),
+        },
+        entry_point="test.html",
         firefox_binary=Path("/path/to/obj-firefox-asan/dist/bin/firefox"),
         timeout=30,
     )
