@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-08-19)
+
+### Features
+
+- **browser_evaluator**: Take testcase files as a single mapping
+  ([`612dbb5`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/612dbb530a0a6de8a92a396492d7b64904dd6704))
+
+
 ## v1.4.2 (2026-08-14)
 
 ### Bug Fixes
