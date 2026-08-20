@@ -1,18 +1,21 @@
 """Tests for browser_evaluator.py."""
 
 import asyncio
+import inspect
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 from grizzly.common import storage as grizzly_storage
 from grizzly.common import utils as grizzly_utils
+from grizzly.target.firefox_target import FirefoxTarget
 
 from fx_audit_mcp.browser_evaluator import (
-    MAX_LOG_SIZE,
     PREF_BLOCKLIST_ENV,
     _build_testcase,
+    _categorize_logs,
     _check_pref_blocklist,
     _collect_dump_files,
     _crashed_process_fields,
@@ -22,58 +25,103 @@ from fx_audit_mcp.browser_evaluator import (
     _load_pref_blocklist,
     browser_evaluator,
     package_testcase,
-    read_grizzly_logs,
 )
-from fx_audit_mcp.models import Logs
+from fx_audit_mcp.models import LogPaths
 
 be_module = sys.modules["fx_audit_mcp.browser_evaluator"]
 
 
+def _write_grizzly_logs(
+    log_dir: Path, stderr: str = "", crashdata: str = ""
+) -> LogPaths:
+    """Lay out log text as grizzly log files and return their categorized paths.
+
+    Routes through _categorize_logs() rather than building a LogPaths by hand so
+    the tests exercise the real filename routing. An empty string writes no
+    file, which is how a run with no such log is expressed.
+    """
+    if stderr:
+        (log_dir / "log_stderr.txt").write_text(stderr)
+    if crashdata:
+        (log_dir / "log_ffp_asan_0.txt").write_text(crashdata)
+    return _categorize_logs(log_dir)
+
+
 class TestExtractCrashPids:
-    def test_standard_asan_format(self) -> None:
+    def test_standard_asan_format(self, tmp_path: Path) -> None:
         """Parse a PID from a standard ASAN error header."""
         crashdata = "==12345==ERROR: AddressSanitizer: heap-use-after-free"
-        assert _extract_crash_pids(crashdata) == [12345]
+        log_paths = _write_grizzly_logs(tmp_path, crashdata=crashdata)
+        assert _extract_crash_pids(log_paths.crashdata) == [12345]
 
-    def test_returns_empty_when_no_match(self) -> None:
+    def test_returns_empty_when_no_match(self, tmp_path: Path) -> None:
         """Return an empty list when the input contains no ASAN PID marker."""
-        assert not _extract_crash_pids("no pid here")
+        log_paths = _write_grizzly_logs(tmp_path, crashdata="no pid here")
+        assert not _extract_crash_pids(log_paths.crashdata)
 
-    def test_extracts_all_matches_in_order(self) -> None:
+    def test_extracts_all_matches_in_order(self, tmp_path: Path) -> None:
         """Return every crashing PID in the order the reports appear."""
         crashdata = "==111==ERROR: AddressSanitizer: ...\n==222==ERROR: something\n"
-        assert _extract_crash_pids(crashdata) == [111, 222]
+        log_paths = _write_grizzly_logs(tmp_path, crashdata=crashdata)
+        assert _extract_crash_pids(log_paths.crashdata) == [111, 222]
+
+    def test_reads_across_multiple_files_in_path_order(self, tmp_path: Path) -> None:
+        """One asan log per crashing process: every file is scanned."""
+        (tmp_path / "log_ffp_asan_111.txt").write_text("==111==ERROR: ASan: SEGV\n")
+        (tmp_path / "log_ffp_asan_222.txt").write_text("==222==ERROR: ASan: SEGV\n")
+        assert _extract_crash_pids(_categorize_logs(tmp_path).crashdata) == [111, 222]
+
+    def test_marker_past_old_truncation_limit_is_found(self, tmp_path: Path) -> None:
+        """A report beyond the old 1 MiB cap is still scanned, not truncated."""
+        crashdata = "x" * 1_048_576 + "\n==777==ERROR: AddressSanitizer: SEGV\n"
+        log_paths = _write_grizzly_logs(tmp_path, crashdata=crashdata)
+        assert _extract_crash_pids(log_paths.crashdata) == [777]
 
 
-class TestReadGrizzlyLogs:
+class TestCategorizeLogs:
     def test_empty_directory(self, tmp_path: Path) -> None:
-        """Return empty strings for all categories when no log files are present."""
-        assert read_grizzly_logs(tmp_path) == Logs(stderr="", stdout="", crashdata="")
+        """Every category is empty when the directory holds no log files."""
+        assert _categorize_logs(tmp_path) == LogPaths()
 
     def test_routes_by_filename(self, tmp_path: Path) -> None:
         """Route log files to stderr, stdout, or crashdata based on filename."""
-        (tmp_path / "log_stderr.txt").write_text("err")
-        (tmp_path / "log_stdout.txt").write_text("out")
-        (tmp_path / "log_asan.txt").write_text("crash")
-        assert read_grizzly_logs(tmp_path) == Logs(
-            stderr="err", stdout="out", crashdata="crash"
+        for name in ("log_stderr.txt", "log_stdout.txt", "log_asan.txt"):
+            (tmp_path / name).write_text(name)
+        assert _categorize_logs(tmp_path) == LogPaths(
+            stderr=[str(tmp_path / "log_stderr.txt")],
+            stdout=[str(tmp_path / "log_stdout.txt")],
+            crashdata=[str(tmp_path / "log_asan.txt")],
         )
 
-    def test_multiple_files_concatenated(self, tmp_path: Path) -> None:
-        """Concatenate multiple files that map to the same category."""
-        (tmp_path / "log_stderr_0.txt").write_text("first")
-        (tmp_path / "log_stderr_1.txt").write_text("second")
-        result = read_grizzly_logs(tmp_path)
-        assert "first" in result.stderr
-        assert "second" in result.stderr
+    def test_multiple_files_in_one_category_sorted(self, tmp_path: Path) -> None:
+        """One asan log per crashing process, listed in sorted path order."""
+        for name in ("log_ffp_asan_222.txt", "log_ffp_asan_111.txt"):
+            (tmp_path / name).write_text(name)
+        assert _categorize_logs(tmp_path).crashdata == [
+            str(tmp_path / "log_ffp_asan_111.txt"),
+            str(tmp_path / "log_ffp_asan_222.txt"),
+        ]
 
-    def test_large_log_tail_truncated(self, tmp_path: Path) -> None:
-        """Tail-truncate logs exceeding MAX_LOG_SIZE to exactly MAX_LOG_SIZE bytes."""
-        content = "x" * (MAX_LOG_SIZE + 100)
-        (tmp_path / "log_stderr.txt").write_text(content)
-        result = read_grizzly_logs(tmp_path)
-        assert len(result.stderr) == MAX_LOG_SIZE
-        assert result.stderr == content[-MAX_LOG_SIZE:]
+    def test_ignores_non_log_entries(self, tmp_path: Path) -> None:
+        """Only log_*.txt files are reported; other entries are skipped."""
+        (tmp_path / "log_stderr.txt").write_text("err")
+        (tmp_path / "prefs.js").write_text("user_pref()")
+        (tmp_path / "minidumps").mkdir()
+        result = _categorize_logs(tmp_path)
+        assert result.stderr == [str(tmp_path / "log_stderr.txt")]
+        assert not result.stdout
+        assert not result.crashdata
+
+
+def test_target_supports_report_size_limit() -> None:
+    """The grizzly pin exposes the knob that disables report log tailing.
+
+    FirefoxTarget swallows unknown keywords via **kwds, so on an older grizzly
+    report_size_limit=0 is discarded silently and logs are tailed to 1 MiB
+    again with nothing to signal it.
+    """
+    params = inspect.signature(FirefoxTarget.__init__).parameters
+    assert "report_size_limit" in params
 
 
 class TestCheckPrefBlocklist:
@@ -355,14 +403,22 @@ class TestPackageTestcase:
 
 class TestBrowserEvaluator:
     @pytest.mark.anyio
-    async def test_missing_firefox_binary(self, tmp_path: Path) -> None:
-        """Verify that a missing firefox binary raises FileNotFoundError."""
+    async def test_missing_firefox_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing firefox binary raises before any log directory is made."""
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
         with pytest.raises(FileNotFoundError, match="Firefox binary not found"):
             await browser_evaluator(
                 file_paths={"test.html": tmp_path / "test.html"},
                 entry_point="test.html",
                 firefox_binary=tmp_path / "no_firefox",
             )
+        # The binary check must stay ahead of the mkdtemp() call, or every
+        # missing-binary call strands an empty directory.
+        assert not list(temp_root.iterdir())
 
 
 class TestCollectDumpFiles:
@@ -416,14 +472,29 @@ class TestExtractChildPtypes:
                     4245: "socket",
                 },
             ),
-            # Nothing to map: no launch records, e.g. tail-truncated stderr. The
-            # parent (pid 100) is never launched as a child, so it never appears.
+            # Nothing to map: no launch records, e.g. the parent died before
+            # flushing them. The parent (pid 100) is never launched as a
+            # child, so it never appears.
             ("[Parent 100: Main Thread]: I/console some unrelated output\n", {}),
         ],
     )
-    def test_maps_pids_to_types(self, stderr: str, expected: dict[int, str]) -> None:
+    def test_maps_pids_to_types(
+        self, stderr: str, expected: dict[int, str], tmp_path: Path
+    ) -> None:
         """Map launched child PIDs to their ChildProcessLifecycle types."""
-        assert _extract_child_ptypes(stderr) == expected
+        log_paths = _write_grizzly_logs(tmp_path, stderr=stderr)
+        assert _extract_child_ptypes(log_paths.stderr) == expected
+
+    def test_reads_across_multiple_files(self, tmp_path: Path) -> None:
+        """Launch records are picked up from every stderr log, not just one."""
+        (tmp_path / "log_stderr_0.txt").write_text(
+            f"{self._PREFIX}++PROCESS [pid = 1] [childID = 1] [type = tab]\n"
+        )
+        (tmp_path / "log_stderr_1.txt").write_text(
+            f"{self._PREFIX}++PROCESS [pid = 2] [childID = 2] [type = gpu]\n"
+        )
+        log_paths = _categorize_logs(tmp_path)
+        assert _extract_child_ptypes(log_paths.stderr) == {1: "tab", 2: "gpu"}
 
 
 class TestCrashedProcessFields:
@@ -478,7 +549,7 @@ class TestCrashedProcessFields:
                     "crashed_rdd": False,
                 },
             ),
-            # No launch record for the crashing PID, e.g. tail-truncated stderr.
+            # No launch record for the crashing PID, e.g. never written.
             (
                 "",
                 _GPU_CRASH_LOG,
@@ -525,10 +596,11 @@ class TestCrashedProcessFields:
         crashdata: str,
         parent_pid: int | None,
         expected: dict[str, bool | None],
+        tmp_path: Path,
     ) -> None:
         """Flag every crashed process; report an unidentified one as None."""
-        logs = Logs(stderr=stderr, stdout="", crashdata=crashdata)
-        fields = _crashed_process_fields(logs, parent_pid)
+        log_paths = _write_grizzly_logs(tmp_path, stderr=stderr, crashdata=crashdata)
+        fields = _crashed_process_fields(log_paths, parent_pid)
         assert {key: fields[key] for key in expected} == expected
 
 
