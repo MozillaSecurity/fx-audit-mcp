@@ -28,6 +28,48 @@ class Logs(ToolModel):
     )
 
 
+class LogPaths(ToolModel):
+    """Paths to log files a tool invocation wrote to disk."""
+
+    stderr: list[str] = Field(
+        default_factory=list,
+        description=(
+            "File paths, NOT log contents - read or grep these files to see "
+            "the output. Absolute paths to the run's complete, untruncated "
+            "stderr logs (Gecko/MOZ_LOG output, including the "
+            "'++PROCESS [pid = N] ... [type = T]' child-process launch "
+            "records). Files can be very large, so prefer grep/head/tail over "
+            "reading a whole file. Consecutive duplicate lines may be "
+            "collapsed into a '[Previous line repeated N times]' marker. The "
+            "containing directory is not deleted by this tool."
+        ),
+        examples=[["/tmp/fx_audit_logs_ab12cd34/log_stderr.txt"]],
+    )
+    stdout: list[str] = Field(
+        default_factory=list,
+        description=(
+            "File paths, NOT log contents - read or grep these files to see "
+            "the output. Absolute paths to the run's complete, untruncated "
+            "stdout logs. The containing directory is not deleted by this "
+            "tool."
+        ),
+        examples=[["/tmp/fx_audit_logs_ab12cd34/log_stdout.txt"]],
+    )
+    crashdata: list[str] = Field(
+        default_factory=list,
+        description=(
+            "File paths, NOT log contents - read or grep these files to see "
+            "the output. Absolute paths to the run's sanitizer and crash "
+            "logs: the ASAN/UBSAN report lives here, not in stderr. One "
+            "log_ffp_asan_<pid>.txt per process that produced sanitizer "
+            "output, where the trailing number is that process's PID, plus "
+            "log_minidump_<n>.txt and log_ffp_worker_<name>.txt when present. "
+            "The containing directory is not deleted by this tool."
+        ),
+        examples=[["/tmp/fx_audit_logs_ab12cd34/log_ffp_asan_1234.txt"]],
+    )
+
+
 class BrowserCrashInfo(ToolModel):
     """Result of running a testcase under Firefox via browser_evaluator."""
 
@@ -38,6 +80,13 @@ class BrowserCrashInfo(ToolModel):
     message: str = Field(
         description="Summary of the Firefox run outcome.",
         examples=["Crash detected", "No crash detected - check logs for clues"],
+    )
+    logs: LogPaths = Field(
+        description=(
+            "Paths to this run's complete, untruncated Firefox logs on disk, "
+            "categorized into stderr/stdout/crashdata. The log contents are "
+            "NOT in this response - read or grep the listed files."
+        ),
     )
     crashed_parent: bool | None = Field(
         default=None,
@@ -81,10 +130,6 @@ class BrowserCrashInfo(ToolModel):
             "(relative filename -> file content)."
         ),
         examples=[{"test.html": "<html>...</html>"}],
-    )
-    logs: Logs | None = Field(
-        default=None,
-        description="stderr/stdout/crashdata captured from Firefox.",
     )
 
 

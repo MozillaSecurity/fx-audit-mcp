@@ -8,6 +8,7 @@ import sys
 import tempfile
 from logging import ERROR, getLogger
 from pathlib import Path
+from shutil import copytree
 from typing import TYPE_CHECKING, Any
 
 from FTB.Signatures.CrashSignature import CrashSignature
@@ -18,15 +19,17 @@ from grizzly.target.firefox_target import FirefoxTarget
 from prefpicker import PrefPicker
 from sapphire import Sapphire
 
-from .models import BrowserCrashInfo, Logs
+from .models import BrowserCrashInfo, LogPaths
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from grizzly.common.report import Report
 
-MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
 PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
 _USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
+_ASAN_PID_RE = re.compile(r"==(\d+)==ERROR:")
 _CHILD_LAUNCH_RE = re.compile(
     r"\+\+PROCESS \[pid = (\d+)\] \[childID = \d+\] \[type = (.*)\]"
 )
@@ -69,29 +72,54 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
             self.parent_pid = self._puppet.get_pid()
 
 
-def _extract_crash_pids(crashdata: str) -> list[int]:
+def _scan_lines(log_paths: list[str]) -> Iterator[str]:
+    """Yield every line of each file in *log_paths*, in path order.
+
+    Logs are untruncated and can be arbitrarily large, so they are streamed a
+    line at a time and never held in memory whole. Scanning at line granularity
+    loses nothing: both patterns matched against these lines
+    (``==<pid>==ERROR:`` and the ``++PROCESS`` launch record) are emitted on a
+    single line, so no match can straddle a line boundary.
+
+    Args:
+        log_paths: Paths of the log files to read, in the order to read them.
+
+    Yields:
+        Each line of each file, decoded as UTF-8 with replacement for invalid
+        sequences.
+    """
+    for path in log_paths:
+        with Path(path).open(encoding="utf-8", errors="replace") as log_file:
+            yield from log_file
+
+
+def _extract_crash_pids(log_paths: list[str]) -> list[int]:
     """Extract the PIDs of all crashing processes from ASAN output.
 
     Args:
-        crashdata: ASAN crash output.
+        log_paths: Paths of the crashdata logs holding the ASAN output.
 
     Returns:
         PIDs of the crashing processes, in report order. Empty if no ASAN PID
         marker is present.
     """
-    return [int(match.group(1)) for match in re.finditer(r"==(\d+)==ERROR:", crashdata)]
+    return [
+        int(match.group(1))
+        for line in _scan_lines(log_paths)
+        for match in _ASAN_PID_RE.finditer(line)
+    ]
 
 
-def _extract_child_ptypes(stderr: str) -> dict[int, str]:
+def _extract_child_ptypes(log_paths: list[str]) -> dict[int, str]:
     """Map each launched child PID to its GeckoProcessType.
 
     Reads the ChildProcessLifecycle log the parent writes to stderr (enabled
     via the MOZ_LOG modules set by browser_evaluator). A PID that carries no
     launch record is absent from the mapping - the parent is never launched as
-    a child, and tail-truncated stderr can drop an early record entirely.
+    a child, and a record is missing when the parent died before flushing it.
 
     Args:
-        stderr: Process stderr captured during the run.
+        log_paths: Paths of the stderr logs captured during the run.
 
     Returns:
         Mapping of child PID to process type (e.g. "tab", "gpu"). A PID can be
@@ -99,18 +127,20 @@ def _extract_child_ptypes(stderr: str) -> dict[int, str]:
     """
     return {
         int(match.group(1)): match.group(2)
-        for match in _CHILD_LAUNCH_RE.finditer(stderr)
+        for line in _scan_lines(log_paths)
+        for match in _CHILD_LAUNCH_RE.finditer(line)
     }
 
 
 def _crashed_process_fields(
-    logs: Logs, parent_pid: int | None
+    log_paths: LogPaths, parent_pid: int | None
 ) -> dict[str, bool | None]:
     """Determine which process a crash occurred in.
 
     Args:
-        logs: Logs captured for the crash. The ASAN PIDs are read from crashdata
-            and resolved against the ChildProcessLifecycle records in stderr.
+        log_paths: Log files captured for the crash. The ASAN PIDs are read
+            from the crashdata logs and resolved against the
+            ChildProcessLifecycle records in the stderr logs.
         parent_pid: PID of the Firefox parent process, or None if unknown.
 
     Returns:
@@ -123,7 +153,7 @@ def _crashed_process_fields(
         as having happened in none of these processes. When crashdata carries
         no ASAN PID marker at all, every flag is None.
     """
-    crash_pids = _extract_crash_pids(logs.crashdata)
+    crash_pids = _extract_crash_pids(log_paths.crashdata)
     if not crash_pids:
         return dict.fromkeys(("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), None)
 
@@ -133,7 +163,7 @@ def _crashed_process_fields(
     if parent_pid is None:
         pfields["crashed_parent"] = None
 
-    child_ptypes = _extract_child_ptypes(logs.stderr)
+    child_ptypes = _extract_child_ptypes(log_paths.stderr)
     for crash_pid in crash_pids:
         if crash_pid == parent_pid:
             pfields["crashed_parent"] = True
@@ -286,34 +316,28 @@ def _build_testcase(file_paths: dict[str, Path], entry_point: str) -> TestCase:
     return testcase
 
 
-def read_grizzly_logs(log_dir: Path) -> Logs:
-    """Categorize log_*.txt files in *log_dir* into stderr/stdout/crashdata.
-
-    Files larger than MAX_LOG_SIZE are tail-truncated.
+def _categorize_logs(log_dir: Path) -> LogPaths:
+    """Categorize the log_*.txt files in *log_dir* into stderr/stdout/crashdata.
 
     Args:
         log_dir: Directory containing log_*.txt files emitted by grizzly.
 
     Returns:
-        Logs with stderr, stdout, and crashdata populated from matched files.
+        LogPaths holding the absolute path of every matched file, sorted within
+        each category. Categories with no matching file are empty.
     """
-    logs: dict[str, str] = {"stderr": "", "stdout": "", "crashdata": ""}
+    paths: dict[str, list[str]] = {"stderr": [], "stdout": [], "crashdata": []}
 
-    for log_path in log_dir.glob("log_*.txt"):
-        with log_path.open(encoding="utf-8", errors="replace") as f:
-            size = log_path.stat().st_size
-            if size > MAX_LOG_SIZE:
-                f.seek(size - MAX_LOG_SIZE)
-            log_content = f.read()
-            log_name = log_path.name.lower()
-            if "stderr" in log_name:
-                logs["stderr"] += log_content
-            elif "stdout" in log_name:
-                logs["stdout"] += log_content
-            else:
-                logs["crashdata"] += log_content
+    for path in sorted(log_dir.glob("log_*.txt")):
+        log_name = path.name.lower()
+        if "stderr" in log_name:
+            paths["stderr"].append(str(path))
+        elif "stdout" in log_name:
+            paths["stdout"].append(str(path))
+        else:
+            paths["crashdata"].append(str(path))
 
-    return Logs(**logs)
+    return LogPaths(**paths)
 
 
 async def package_testcase(
@@ -416,9 +440,13 @@ async def browser_evaluator(  # pragma: no cover
     cannot be disabled by the caller.
 
     Ignored-signature matches (loaded from ``ignored_signatures/``) are
-    filtered out before this returns. Captured logs are tail-truncated to
-    MAX_LOG_SIZE. On crash, the dumped testcase directory contents are
-    returned alongside the logs.
+    filtered out before this returns. Logs are never returned inline: the
+    complete, untruncated Firefox logs are written to a fresh temporary
+    directory and the returned ``logs`` holds their paths, categorized into
+    stderr/stdout/crashdata, so they can be read, grepped and tailed with file
+    tools. That directory is never deleted; the caller owns it and is
+    responsible for removing it. On crash, the dumped testcase files are
+    returned inline alongside those paths.
 
     Args:
         file_paths: Testcase files, as a mapping of the name each file should
@@ -452,8 +480,13 @@ async def browser_evaluator(  # pragma: no cover
         disable_sandboxing=not enable_sandbox,
         display_mode=display_mode,
         launch_timeout=30,
+        # log_limit/memory_limit: ffpuppet watchdogs (0 = no kill threshold).
+        # report_size_limit: 0 disables grizzly's destructive log tailing, so
+        # the saved logs are complete. Swap in a large finite byte count if a
+        # pathological run ever makes grizzly's own in-memory log parsing OOM.
         log_limit=0,
         memory_limit=0,
+        report_size_limit=0,
     )
 
     # Enable verbose logging
@@ -480,6 +513,9 @@ async def browser_evaluator(  # pragma: no cover
     # Process assets (prefs, etc.) - required for Firefox to launch properly
     target.process_assets()
 
+    # Never removed by this module - the caller owns it.
+    log_dir = Path(tempfile.mkdtemp(prefix="fx_audit_logs_"))
+
     results = []
     try:
         with Sapphire(auto_close=1) as server:
@@ -500,50 +536,58 @@ async def browser_evaluator(  # pragma: no cover
                 except TargetLaunchTimeout:
                     if target.launch_timeout_report is None:
                         raise
-                    logs = read_grizzly_logs(target.launch_timeout_report.path)
+                    # Copy before the finally block rmtree()s the report dir.
+                    copytree(
+                        target.launch_timeout_report.path,
+                        log_dir,
+                        dirs_exist_ok=True,
+                    )
+                    log_paths = _categorize_logs(log_dir)
                     # A child process (content/GPU/etc.) can crash with ASAN
                     # while the parent stays alive and the bootstrap times out.
-                    if logs.crashdata:
+                    # Test file size rather than the crash PIDs: UBSAN reports
+                    # carry no ==pid==ERROR: marker, so a PID scan would miss
+                    # them here.
+                    if any(Path(path).stat().st_size for path in log_paths.crashdata):
                         return BrowserCrashInfo(
                             crashed=True,
-                            **_crashed_process_fields(logs, target.parent_pid),
+                            **_crashed_process_fields(log_paths, target.parent_pid),
                             files={},
-                            logs=logs,
+                            logs=log_paths,
                             message="Crash detected",
                         )
                     return BrowserCrashInfo(
                         crashed=False,
+                        logs=log_paths,
                         message=(
                             "Firefox failed to launch within the timeout - "
-                            "check logs for the underlying cause"
+                            "check the logs for the underlying cause"
                         ),
-                        logs=logs,
                     )
 
         if not results:
-            with tempfile.TemporaryDirectory(prefix="fx_audit_logs_") as log_dir_str:
-                log_dir = Path(log_dir_str)
-                target.save_logs(log_dir)
-                return BrowserCrashInfo(
-                    crashed=False,
-                    message=(
-                        "No crash detected - check logs for clues "
-                        "about why the testcase didn't trigger the vulnerability"
-                    ),
-                    logs=read_grizzly_logs(log_dir),
-                )
+            target.save_logs(log_dir)
+            return BrowserCrashInfo(
+                crashed=False,
+                logs=_categorize_logs(log_dir),
+                message=(
+                    "No crash detected - check the logs for clues "
+                    "about why the testcase didn't trigger the vulnerability"
+                ),
+            )
 
         result_obj = results[0]
-        report = result_obj.report
+        # Copy before the finally block rmtree()s the report dir.
+        copytree(result_obj.report.path, log_dir, dirs_exist_ok=True)
+        log_paths = _categorize_logs(log_dir)
         with tempfile.TemporaryDirectory(prefix="fx_audit_dump_") as dump_dir_str:
             dump_dir = Path(dump_dir_str)
             testcase.dump(dump_dir, include_details=True)
-            logs = read_grizzly_logs(report.path)
             return BrowserCrashInfo(
                 crashed=True,
-                **_crashed_process_fields(logs, target.parent_pid),
+                **_crashed_process_fields(log_paths, target.parent_pid),
                 files=_collect_dump_files(dump_dir),
-                logs=logs,
+                logs=log_paths,
                 message="Crash detected",
             )
 
