@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v2.1.0 (2026-08-21)
+
+### Bug Fixes
+
+- Tolerate CLI output errors
+  ([`19e7156`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/19e715694d54f3c0812be171995bd062dfa5cc2d))
+
+### Documentation
+
+- Add process_output.py description and location
+  ([`3a5fafc`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/3a5fafc06f388a85c2d47e08537bb2f8f88fd6cd))
+
+### Features
+
+- Add streaming support for build_firefox output
+  ([`ba477d7`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/ba477d776c85c6f5dff044d6a42a351b6e9c9539))
+
+
 ## v2.0.0 (2026-08-19)
 
 ### Features
