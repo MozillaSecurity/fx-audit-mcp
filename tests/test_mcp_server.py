@@ -55,6 +55,18 @@ class TestBrowserEvaluatorSchema:
         assert param["description"]
 
     @pytest.mark.anyio
+    async def test_log_destination_is_not_caller_controlled(self) -> None:
+        """The log directory is always a fresh temp dir, never a caller input.
+
+        A caller-supplied destination could hold stale log_*.txt from an
+        earlier run, which would be read back as this run's crashdata.
+        """
+        tool = await mcp.get_tool("browser_evaluator")
+        assert tool is not None
+        schema = tool.to_mcp_tool().model_dump()["inputSchema"]
+        assert "log_path" not in schema["properties"]
+
+    @pytest.mark.anyio
     async def test_file_paths_and_entry_point_are_required(self) -> None:
         """Testcase files are a required name -> source path map."""
         tool = await mcp.get_tool("browser_evaluator")

@@ -56,8 +56,13 @@ async def main():
         timeout=30,
     )
     print(result.crashed, result.message)
-    if result.logs:
-        print(result.logs.crashdata[:500])
+    # Complete, untruncated logs are on disk; result.logs holds their paths,
+    # grouped into stderr/stdout/crashdata.
+    # The ASAN report is in crashdata (log_ffp_asan_<pid>.txt), not stderr.
+    for log in result.logs.crashdata:
+        print(Path(log).read_text()[:500])
+    # Logs live in a fresh temp directory that is never deleted; cleaning it
+    # up is up to you: shutil.rmtree(Path(result.logs.stderr[0]).parent)
 
 asyncio.run(main())
 ```
@@ -127,7 +132,12 @@ agent = Agent(
 
 - **browser_evaluator**: Crash signatures in `ignored_signatures/` (FuzzManager
   format) are filtered out before returning, so common shutdown hangs don't
-  pollute results.
+  pollute results. Complete logs are written to a fresh temp directory each
+  run and `logs` returns their paths (grouped into `stderr`/`stdout`/
+  `crashdata`) instead of the contents, so they can be grepped rather than
+  truncated to fit. The directory is never deleted and logs are unbounded, so
+  callers should clean up — take the parent of any returned path. The returned
+  paths are only meaningful to a client sharing a filesystem with the server.
 - **js_shell_evaluator**: Detects crashes via negative exit code (signal) or
   `AddressSanitizer`/`UndefinedBehaviorSanitizer` in stderr. JS errors (positive
   exit codes) are not treated as crashes.

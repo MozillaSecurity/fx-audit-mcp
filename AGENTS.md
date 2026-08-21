@@ -38,8 +38,17 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   Exceptions are allowed to bubble (FastMCP surfaces them as `isError=True`):
   tools raise `FileNotFoundError` for missing binaries, etc.
   Do not wrap tool bodies in catch-all `try/except Exception` blocks.
-- Crash detection via sanitizer output is always on stderr; logs are
-  tail-truncated to `MAX_LOG_SIZE` (1 MiB) to avoid overwhelming LLM context.
+- Crash detection via sanitizer output is always on stderr. `js_shell_evaluator`
+  tail-truncates its logs to `MAX_LOG_SIZE` (1 MiB) to avoid overwhelming LLM
+  context; `browser_evaluator` instead writes untruncated logs to a fresh temp
+  directory and returns their paths (`BrowserCrashInfo.logs`, a `LogPaths` of
+  stderr/stdout/crashdata file lists), which the caller owns and must clean up.
+  The destination is deliberately not a parameter: stale `log_*.txt` in a
+  caller-supplied directory would be read back as this run's crashdata. Crash
+  attribution streams those files a line at a time (`_scan_lines`) and never
+  holds a whole log in memory. One trade-off remains: `report_size_limit=0`
+  means grizzly parses whole logs in memory when matching ignored signatures —
+  swap in a large finite limit if that ever OOMs.
 - Long-running tools should stream subprocess output through `ctx` when a
   request context is available and capture the output for their return model;
   without a context, they should write output directly to stdout/stderr.
