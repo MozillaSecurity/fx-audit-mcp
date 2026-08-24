@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.0.0 (2026-08-24)
+
+### Features
+
+- **browser_evaluator**: Write untruncated logs to disk
+  ([`e6d3aae`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e6d3aaed921f00d9b33c8ac6cd847aa9cbd42be1))
+
+### Breaking Changes
+
+- **browser_evaluator**: BrowserCrashInfo.logs has changed and grizzly-framework>=1.3.0 is now
+  required for report_size_limit.
+
+
 ## v2.1.0 (2026-08-21)
 
 ### Bug Fixes
