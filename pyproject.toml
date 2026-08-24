@@ -43,9 +43,9 @@ fx-audit-mcp = "fx_audit_mcp.mcp_server:main"
 fx-audit-build-firefox = "fx_audit_mcp.build_firefox:main"
 
 [project.urls]
-Homepage = "https://github.com/mozilla/fx-audit-mcp"
-Repository = "https://github.com/mozilla/fx-audit-mcp"
-Issues = "https://github.com/mozilla/fx-audit-mcp/issues"
+Homepage = "https://github.com/MozillaSecurity/fx-audit-mcp"
+Repository = "https://github.com/MozillaSecurity/fx-audit-mcp"
+Issues = "https://github.com/MozillaSecurity/fx-audit-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]
