@@ -31,7 +31,8 @@ async def js_shell_evaluator(
     returned ``logs`` holds their paths. That directory is never deleted; the
     caller owns it. Crash diagnostics arrive on stderr, whether a sanitizer
     report or a bare ``Assertion failure:`` message, so on a crash
-    ``logs.crashdata`` names that same stderr file.
+    ``logs.crashdata`` names that same stderr file. A crash that printed
+    nothing at all leaves ``logs.crashdata`` empty.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
@@ -84,10 +85,15 @@ async def js_shell_evaluator(
         )
 
         crashed = killed_by_signal or has_sanitizer
-        # Every crash puts its diagnostics on stderr, sanitizer report or bare
-        # assertion message, so crashdata always names that file.
+        # A crash puts its diagnostics on stderr, sanitizer report or bare
+        # assertion message, so crashdata names that file. A process killed
+        # before it printed anything (SIGKILL from the OOM killer, a segfault
+        # in a build with no sanitizer) leaves it empty, and naming an empty
+        # file would promise diagnostics that aren't there.
         logs = write_crash_logs(
-            stdout_bytes, stderr_bytes, crashdata=("stderr",) if crashed else ()
+            stdout_bytes,
+            stderr_bytes,
+            crashdata=("stderr",) if crashed and stderr_bytes else (),
         )
 
         if not crashed:
