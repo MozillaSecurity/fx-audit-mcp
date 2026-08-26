@@ -157,15 +157,27 @@ async def test_assertion_abort_still_reports_crashdata(
 
 
 @pytest.mark.anyio
-async def test_captured_testcase_uses_a_stable_name(
+async def test_testcase_is_run_under_a_stable_name(
     mocker: MockerFixture, js_binary: Path
 ) -> None:
-    """Verify that the reported testcase filename is not a random temp name."""
-    _mock_proc(mocker, returncode=-11, stderr=b"AddressSanitizer\n")
+    """Verify the shell is handed a predictable filename, not a random temp name."""
+    proc: MagicMock = mocker.AsyncMock()
+    proc.returncode = 0
+    proc.communicate = AsyncMock(return_value=(b"", b""))
+    seen: dict[str, str] = {}
 
-    result = await js_shell_evaluator("boom()", js_binary)
+    async def capture(*args: str, **_kwargs: object) -> MagicMock:
+        # The temp directory is removed once the tool returns, so read it here.
+        path = Path(args[-1])
+        seen["name"] = path.name
+        seen["content"] = path.read_text(encoding="utf-8")
+        return proc
 
-    assert result.files == {"testcase.js": "boom()"}
+    mocker.patch("asyncio.create_subprocess_exec", side_effect=capture)
+
+    await js_shell_evaluator("boom()", js_binary)
+
+    assert seen == {"name": "testcase.js", "content": "boom()"}
 
 
 @pytest.mark.anyio

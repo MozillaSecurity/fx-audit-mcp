@@ -100,6 +100,5 @@ async def js_shell_evaluator(
         return JSShellCrashInfo(
             crashed=True,
             exit_code=exit_code,
-            files={testcase_path.name: content},
             logs=logs,
         )

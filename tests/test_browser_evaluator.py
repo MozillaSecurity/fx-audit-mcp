@@ -17,7 +17,6 @@ from fx_audit_mcp.browser_evaluator import (
     _build_testcase,
     _categorize_logs,
     _check_pref_blocklist,
-    _collect_dump_files,
     _crashed_process_fields,
     _extract_child_ptypes,
     _extract_crash_pids,
@@ -419,33 +418,6 @@ class TestBrowserEvaluator:
         # The binary check must stay ahead of the mkdtemp() call, or every
         # missing-binary call strands an empty directory.
         assert not list(temp_root.iterdir())
-
-
-class TestCollectDumpFiles:
-    def test_empty_dir_returns_empty(self, tmp_path: Path) -> None:
-        """No files under the dump dir → empty mapping."""
-        assert not _collect_dump_files(tmp_path)
-
-    def test_relative_paths_preserved(self, tmp_path: Path) -> None:
-        """File paths are returned relative to the dump dir, not absolute."""
-        (tmp_path / "test.html").write_text("<html>x</html>")
-        sub = tmp_path / "sub"
-        sub.mkdir()
-        (sub / "nested.js").write_text("var y = 1;")
-        files = _collect_dump_files(tmp_path)
-        assert files == {
-            "test.html": "<html>x</html>",
-            "sub/nested.js": "var y = 1;",
-        }
-
-    def test_invalid_utf8_uses_replacement(self, tmp_path: Path) -> None:
-        """Files with non-UTF-8 bytes are read with errors='replace'."""
-        (tmp_path / "binary.bin").write_bytes(b"\xff\xfe\x80\x00ok")
-        files = _collect_dump_files(tmp_path)
-        # Replacement character (U+FFFD) appears at each invalid byte; the
-        # trailing valid bytes survive.
-        assert "ok" in files["binary.bin"]
-        assert "�" in files["binary.bin"]
 
 
 class TestExtractChildPtypes:

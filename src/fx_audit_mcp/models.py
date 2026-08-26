@@ -92,14 +92,6 @@ class BrowserCrashInfo(ToolModel):
         default=None,
         description="True if the crash occurred in a utility process.",
     )
-    files: dict[str, str] | None = Field(
-        default=None,
-        description=(
-            "Testcase files that reproduce the crash "
-            "(relative filename -> file content)."
-        ),
-        examples=[{"test.html": "<html>...</html>"}],
-    )
 
 
 class JSShellCrashInfo(ToolModel):
@@ -110,13 +102,6 @@ class JSShellCrashInfo(ToolModel):
     )
     exit_code: int = Field(
         description="Exit status. On POSIX, negative means killed by that signal."
-    )
-    files: dict[str, str] | None = Field(
-        default=None,
-        description=(
-            "Testcase files captured on crash (relative filename -> file content)."
-        ),
-        examples=[{"testcase.js": "var x = 1;"}],
     )
     logs: CrashLogPaths = Field(
         description=(
