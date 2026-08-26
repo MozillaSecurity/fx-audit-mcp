@@ -49,10 +49,7 @@ class BrowserCrashInfo(ToolModel):
     crashed: bool = Field(
         description="True if Firefox crashed while running the testcase."
     )
-    message: str = Field(
-        description="Summary of the Firefox run outcome.",
-        examples=["Crash detected", "No crash detected - check logs for clues"],
-    )
+    message: str = Field(description="Summary of the Firefox run outcome.")
     logs: CrashLogPaths = Field(
         description=(
             "This run's Firefox logs. stderr holds the Gecko/MOZ_LOG output, "
@@ -139,6 +136,5 @@ class BuildResult(ToolModel):
     build_dir: str | None = Field(
         default=None,
         description="Absolute path to the build output directory on success.",
-        examples=["/path/to/firefox/obj-fuzz"],
     )
     logs: LogPaths = Field(description="Paths to this build's logs.")
