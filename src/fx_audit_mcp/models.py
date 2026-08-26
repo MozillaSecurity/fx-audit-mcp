@@ -14,20 +14,18 @@ class ToolModel(BaseModel):
 
 
 class LogPaths(ToolModel):
-    """Absolute paths to the log files a tool invocation wrote to disk.
+    """Log files a tool invocation wrote to disk.
 
     The containing directory is never deleted; the caller owns it.
     """
 
     stderr: list[str] = Field(
         default_factory=list,
-        description="Paths to the run's stderr logs.",
-        examples=[["/tmp/fx_audit_logs_ab12cd34/log_stderr.txt"]],
+        description="Absolute paths to the run's stderr logs.",
     )
     stdout: list[str] = Field(
         default_factory=list,
-        description="Paths to the run's stdout logs.",
-        examples=[["/tmp/fx_audit_logs_ab12cd34/log_stdout.txt"]],
+        description="Absolute paths to the run's stdout logs.",
     )
 
 
@@ -37,12 +35,11 @@ class CrashLogPaths(LogPaths):
     crashdata: list[str] = Field(
         default_factory=list,
         description=(
-            "Paths to the run's crash diagnostics: an ASAN/UBSAN report, or "
-            "a bare assertion or abort message when the process died without "
-            "one. A path also listed under stderr or stdout is that same "
-            "file, not a copy."
+            "Absolute paths to the run's crash diagnostics: an ASAN/UBSAN "
+            "report, or a bare assertion or abort message when the process "
+            "died without one. A path also listed under stderr or stdout is "
+            "that same file, not a copy."
         ),
-        examples=[["/tmp/fx_audit_logs_ab12cd34/log_ffp_asan_1234.txt"]],
     )
 
 
@@ -50,8 +47,7 @@ class BrowserCrashInfo(ToolModel):
     """Result of running a testcase under Firefox via browser_evaluator."""
 
     crashed: bool = Field(
-        description="True if Firefox crashed while running the testcase.",
-        examples=[True, False],
+        description="True if Firefox crashed while running the testcase."
     )
     message: str = Field(
         description="Summary of the Firefox run outcome.",
@@ -71,37 +67,30 @@ class BrowserCrashInfo(ToolModel):
     crashed_parent: bool | None = Field(
         default=None,
         description="True if the crash occurred in the parent process.",
-        examples=[True, False],
     )
     crashed_content: bool | None = Field(
         default=None,
         description="True if the crash occurred in a content ('tab') process.",
-        examples=[True, False],
     )
     crashed_gpu: bool | None = Field(
         default=None,
         description="True if the crash occurred in the GPU process.",
-        examples=[True, False],
     )
     crashed_rdd: bool | None = Field(
         default=None,
         description="True if the crash occurred in the RDD (media decode) process.",
-        examples=[True, False],
     )
     crashed_gmp: bool | None = Field(
         default=None,
         description="True if the crash occurred in a GMP (Gecko Media Plugin) process.",
-        examples=[True, False],
     )
     crashed_socket: bool | None = Field(
         default=None,
         description="True if the crash occurred in the socket process.",
-        examples=[True, False],
     )
     crashed_utility: bool | None = Field(
         default=None,
         description="True if the crash occurred in a utility process.",
-        examples=[True, False],
     )
     files: dict[str, str] | None = Field(
         default=None,
@@ -117,12 +106,10 @@ class JSShellCrashInfo(ToolModel):
     """Result of running a testcase under the SpiderMonkey JS shell."""
 
     crashed: bool = Field(
-        description="True if the JS shell crashed while running the testcase.",
-        examples=[True, False],
+        description="True if the JS shell crashed while running the testcase."
     )
     exit_code: int = Field(
-        description="Exit status. On POSIX, negative means killed by that signal.",
-        examples=[0, 1, -11],
+        description="Exit status. On POSIX, negative means killed by that signal."
     )
     files: dict[str, str] | None = Field(
         default=None,
@@ -144,13 +131,9 @@ class JSShellCrashInfo(ToolModel):
 class NSSGtestCrashInfo(ToolModel):
     """Result of running an NSS gtest under AddressSanitizer."""
 
-    crashed: bool = Field(
-        description="True if AddressSanitizer detected a crash.",
-        examples=[True, False],
-    )
+    crashed: bool = Field(description="True if AddressSanitizer detected a crash.")
     exit_code: int = Field(
-        description="Exit status. On POSIX, negative means killed by that signal.",
-        examples=[0, 1, -11],
+        description="Exit status. On POSIX, negative means killed by that signal."
     )
     logs: CrashLogPaths = Field(
         description=(
@@ -164,19 +147,13 @@ class NSSGtestCrashInfo(ToolModel):
 class BuildResult(ToolModel):
     """Result of a Firefox or NSS build invocation."""
 
-    success: bool = Field(
-        description="True if the build completed successfully.",
-        examples=[True, False],
-    )
+    success: bool = Field(description="True if the build completed successfully.")
     exit_code: int = Field(
-        description="Exit status. On POSIX, negative means killed by that signal.",
-        examples=[0, 1, -11],
+        description="Exit status. On POSIX, negative means killed by that signal."
     )
     build_dir: str | None = Field(
         default=None,
         description="Absolute path to the build output directory on success.",
         examples=["/path/to/firefox/obj-fuzz"],
     )
-    logs: LogPaths = Field(
-        description="Paths to this build's logs.",
-    )
+    logs: LogPaths = Field(description="Paths to this build's logs.")
