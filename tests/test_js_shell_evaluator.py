@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from fx_audit_mcp.js_shell_evaluator import js_shell_evaluator
+from fx_audit_mcp.js_shell_evaluator import NTSTATUS_ERROR_BASE, js_shell_evaluator
 
 
 def _mock_proc(
@@ -76,6 +76,27 @@ async def test_ubsan_in_stderr(mocker: MockerFixture, js_binary: Path) -> None:
     )
     result = await js_shell_evaluator("x", js_binary)
     assert result.crashed is True
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    [
+        (0xC0000005, True),  # STATUS_ACCESS_VIOLATION
+        (0xC0000374, True),  # STATUS_HEAP_CORRUPTION
+        (NTSTATUS_ERROR_BASE - 1, False),  # below the error range, still an exit status
+    ],
+)
+@pytest.mark.anyio
+async def test_windows_ntstatus_exit_signals_crash(
+    mocker: MockerFixture, js_binary: Path, returncode: int, expected: bool
+) -> None:
+    """Windows reports faults as an NTSTATUS exit code rather than a signal."""
+    _mock_proc(mocker, returncode=returncode, stderr=b"")
+
+    result = await js_shell_evaluator("crash()", js_binary)
+
+    assert result.crashed is expected
+    assert result.exit_code == returncode
 
 
 @pytest.mark.anyio

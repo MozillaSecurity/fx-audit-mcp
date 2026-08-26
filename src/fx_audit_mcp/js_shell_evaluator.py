@@ -8,6 +8,12 @@ from pathlib import Path
 from .logs import write_crash_logs
 from .models import JSShellCrashInfo
 
+# Windows has no signals to report: an unhandled exception becomes the
+# process's exit code as an NTSTATUS value, and 0xC0000000 opens the range
+# reserved for errors (0xC0000005 is an access violation). A POSIX exit status
+# never reaches this far, so the check needs no platform guard.
+NTSTATUS_ERROR_BASE = 0xC0000000
+
 
 async def js_shell_evaluator(
     content: str,
@@ -19,8 +25,9 @@ async def js_shell_evaluator(
     SpiderMonkey shell with --fuzzing-safe and detecting ASAN/UBSAN output
     or signal exits.
 
-    Always runs the shell with ``--fuzzing-safe``. A crash is reported when
-    the shell exits via signal (negative exit code) or when
+    Always runs the shell with ``--fuzzing-safe``. A crash is reported when the
+    OS reported the fault in the exit status - a signal on POSIX (negative exit
+    code), an NTSTATUS error on Windows (0xC0000005 and up) - or when
     ``AddressSanitizer`` / ``UndefinedBehaviorSanitizer`` appears in stderr.
     A JS error (positive non-zero exit) is not a crash but is still a result:
     it returns ``crashed: false`` with the shell's output, since the run itself
@@ -78,13 +85,13 @@ async def js_shell_evaluator(
         assert proc.returncode is not None
         exit_code = proc.returncode
 
-        # Detect crash: killed by signal or ASAN/UBSAN in stderr
-        killed_by_signal = exit_code < 0
+        # Detect crash: died on a fault the OS reported, or ASAN/UBSAN in stderr
+        died_on_fault = exit_code < 0 or exit_code >= NTSTATUS_ERROR_BASE
         has_sanitizer = (
             "AddressSanitizer" in stderr or "UndefinedBehaviorSanitizer" in stderr
         )
 
-        crashed = killed_by_signal or has_sanitizer
+        crashed = died_on_fault or has_sanitizer
         # A crash puts its diagnostics on stderr, sanitizer report or bare
         # assertion message, so crashdata names that file. A process killed
         # before it printed anything (SIGKILL from the OOM killer, a segfault

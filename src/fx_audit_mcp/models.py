@@ -83,7 +83,8 @@ class JSShellCrashInfo(ToolModel):
     """True if the JS shell crashed while running the testcase."""
 
     exit_code: int
-    """Exit status. On POSIX, negative means killed by that signal."""
+    """Exit status. On POSIX, negative means killed by that signal; on Windows,
+    a value of 0xC0000005 or above is the NTSTATUS of an unhandled exception."""
 
     logs: CrashLogPaths
     """This run's JS shell logs. The shell writes its crash diagnostics to
