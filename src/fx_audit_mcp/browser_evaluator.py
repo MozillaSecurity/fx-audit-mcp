@@ -20,7 +20,7 @@ from prefpicker import PrefPicker
 from sapphire import Sapphire
 
 from .logs import LOG_DIR_PREFIX
-from .models import BrowserCrashInfo, LogPaths
+from .models import BrowserCrashInfo, CrashLogPaths
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -134,7 +134,7 @@ def _extract_child_ptypes(log_paths: list[str]) -> dict[int, str]:
 
 
 def _crashed_process_fields(
-    log_paths: LogPaths, parent_pid: int | None
+    log_paths: CrashLogPaths, parent_pid: int | None
 ) -> dict[str, bool | None]:
     """Determine which process a crash occurred in.
 
@@ -317,15 +317,15 @@ def _build_testcase(file_paths: dict[str, Path], entry_point: str) -> TestCase:
     return testcase
 
 
-def _categorize_logs(log_dir: Path) -> LogPaths:
+def _categorize_logs(log_dir: Path) -> CrashLogPaths:
     """Categorize the log_*.txt files in *log_dir* into stderr/stdout/crashdata.
 
     Args:
         log_dir: Directory containing log_*.txt files emitted by grizzly.
 
     Returns:
-        LogPaths holding the absolute path of every matched file, sorted within
-        each category. Categories with no matching file are empty.
+        CrashLogPaths holding the absolute path of every matched file, sorted
+        within each category. Categories with no matching file are empty.
     """
     paths: dict[str, list[str]] = {"stderr": [], "stdout": [], "crashdata": []}
 
@@ -338,7 +338,7 @@ def _categorize_logs(log_dir: Path) -> LogPaths:
         else:
             paths["crashdata"].append(str(path))
 
-    return LogPaths(**paths)
+    return CrashLogPaths(**paths)
 
 
 async def package_testcase(
@@ -441,13 +441,10 @@ async def browser_evaluator(  # pragma: no cover
     cannot be disabled by the caller.
 
     Ignored-signature matches (loaded from ``ignored_signatures/``) are
-    filtered out before this returns. Logs are never returned inline: the
-    complete, untruncated Firefox logs are written to a fresh temporary
-    directory and the returned ``logs`` holds their paths, categorized into
-    stderr/stdout/crashdata, so they can be read, grepped and tailed with file
-    tools. That directory is never deleted; the caller owns it and is
-    responsible for removing it. On crash, the dumped testcase files are
-    returned inline alongside those paths.
+    filtered out before this returns. Firefox logs are written to a fresh
+    temporary directory and the returned ``logs`` holds their paths. That
+    directory is never deleted; the caller owns it. On crash, the dumped
+    testcase files are returned inline alongside those paths.
 
     Args:
         file_paths: Testcase files, as a mapping of the name each file should

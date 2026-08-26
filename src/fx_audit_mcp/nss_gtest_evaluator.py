@@ -4,7 +4,7 @@ import asyncio
 import os
 from pathlib import Path
 
-from .logs import write_subprocess_logs
+from .logs import StreamName, write_crash_logs
 from .models import NSSGtestCrashInfo
 
 
@@ -24,11 +24,9 @@ async def nss_gtest_evaluator(
     succeeded. Only an operational failure raises, when the harness could not
     be run to completion at all: currently a timeout.
 
-    Logs are never returned inline: the complete, untruncated stdout and
-    stderr are written to a fresh temporary directory and the returned
-    ``logs`` holds their paths, so they can be read, grepped and tailed with
-    file tools. That directory is never deleted; the caller owns it and is
-    responsible for removing it.
+    stdout and stderr are written to a fresh temporary directory and the
+    returned ``logs`` holds their paths. That directory is never deleted; the
+    caller owns it.
 
     On ``crashed: false`` examine ``logs.stderr`` / ``logs.stdout`` for the
     failure mode. On ``crashed: true`` ``logs.crashdata`` names whichever of
@@ -71,12 +69,12 @@ async def nss_gtest_evaluator(
     stdout_output = stdout_bytes.decode("utf-8", errors="replace")
     stderr_output = stderr_bytes.decode("utf-8", errors="replace")
 
-    asan_streams = tuple(
-        name
-        for name, text in (("stdout", stdout_output), ("stderr", stderr_output))
-        if "AddressSanitizer" in text
+    streams: tuple[tuple[StreamName, str], ...] = (
+        ("stdout", stdout_output),
+        ("stderr", stderr_output),
     )
-    logs = write_subprocess_logs(stdout_bytes, stderr_bytes, crashdata=asan_streams)
+    asan_streams = tuple(name for name, text in streams if "AddressSanitizer" in text)
+    logs = write_crash_logs(stdout_bytes, stderr_bytes, crashdata=asan_streams)
 
     if asan_streams:
         return NSSGtestCrashInfo(

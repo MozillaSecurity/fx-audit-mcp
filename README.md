@@ -130,9 +130,10 @@ agent = Agent(
 
 ## Crash Detection
 
-Every evaluator writes complete logs to a fresh temp directory each run and
-returns their paths in `logs` (grouped into `stderr`/`stdout`/`crashdata`)
-instead of the contents, so they can be grepped rather than truncated to fit.
+Every tool writes complete logs to a fresh temp directory each run and
+returns their paths in `logs` instead of the contents, so they can be grepped
+rather than truncated to fit. The build tools return `stderr`/`stdout`; the
+evaluators add `crashdata`.
 The directory is never deleted and logs are unbounded, so callers should clean
 up — take the parent of any returned path. The returned paths are only
 meaningful to a client sharing a filesystem with the server.
@@ -143,9 +144,8 @@ meaningful to a client sharing a filesystem with the server.
   (`log_ffp_asan_<pid>.txt`), not `stderr`.
 - **js_shell_evaluator**: Detects crashes via negative exit code (signal) or
   `AddressSanitizer`/`UndefinedBehaviorSanitizer` in stderr. JS errors (positive
-  exit codes) are not treated as crashes. The report arrives on stderr, so
-  `crashdata` names that same stderr file; a signal-only crash leaves
-  `crashdata` empty.
+  exit codes) are not treated as crashes. Crash diagnostics arrive on stderr,
+  so on a crash `crashdata` names that same stderr file.
 - **nss_gtest_evaluator**: Detects `AddressSanitizer` in stdout or stderr, and
   `crashdata` names whichever of those files carried the report.
 

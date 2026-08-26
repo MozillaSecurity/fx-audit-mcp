@@ -4,6 +4,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from .logs import write_logs
 from .models import BuildResult
 
 
@@ -15,9 +16,13 @@ async def build_nss(firefox_dir: Path) -> BuildResult:
     relative to ``security/nss``) before invoking the build.
 
     A build that runs and fails is a result, not an error: it returns
-    ``success: false`` with the compiler output. Only an operational failure
-    raises, when the build could not be started at all, such as a missing
-    source, NSPR or NSS directory.
+    ``success: false``. Only an operational failure raises, when the build
+    could not be started at all, such as a missing source, NSPR or NSS
+    directory.
+
+    stdout and stderr are written to a fresh temporary directory and the
+    returned ``logs`` holds their paths. That directory is never deleted; the
+    caller owns it.
 
     Args:
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
@@ -57,21 +62,18 @@ async def build_nss(firefox_dir: Path) -> BuildResult:
     )
 
     stdout, stderr = await process.communicate()
-    stdout_output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    stderr_output = stderr.decode("utf-8", errors="replace") if stderr else ""
+    logs = write_logs(stdout or b"", stderr or b"")
 
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=str(build_dir),
             message="NSS build completed successfully",
-            stdout=stdout_output,
-            stderr=stderr_output,
+            logs=logs,
         )
 
     return BuildResult(
         success=False,
         message=f"NSS build failed with exit code {process.returncode}",
-        stdout=stdout_output,
-        stderr=stderr_output,
+        logs=logs,
     )

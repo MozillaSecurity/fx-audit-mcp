@@ -11,6 +11,7 @@ from shutil import which
 
 from fastmcp import Context
 
+from .logs import write_logs
 from .models import BuildResult
 from .process_output import stream_process_output
 
@@ -129,9 +130,13 @@ async def build_firefox(
     MOZCONFIG via ``mach environment`` and returned as ``build_dir``.
 
     A build that runs and fails is a result, not an error: it returns
-    ``success: false`` with the compiler output. Only an operational failure
-    raises, when the build could not be started at all, such as a missing
-    source directory or MOZCONFIG.
+    ``success: false``. Only an operational failure raises, when the build
+    could not be started at all, such as a missing source directory or
+    MOZCONFIG.
+
+    stdout and stderr are written to a fresh temporary directory and the
+    returned ``logs`` holds their paths. That directory is never deleted; the
+    caller owns it.
 
     Args:
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
@@ -216,20 +221,19 @@ async def build_firefox(
         raise
 
     await process.wait()
+    logs = write_logs(stdout_output, stderr_output)
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=build_dir,
             message="Firefox build completed successfully",
-            stdout=stdout_output,
-            stderr=stderr_output,
+            logs=logs,
         )
 
     return BuildResult(
         success=False,
         message=f"Firefox build failed with exit code {process.returncode}",
-        stdout=stdout_output,
-        stderr=stderr_output,
+        logs=logs,
     )
 
 
@@ -253,6 +257,11 @@ def main() -> None:
     print(f"Message: {result.message}")
     if result.build_dir:
         print(f"Build dir: {result.build_dir}")
+    if result.logs.stdout:
+        # The build already streamed to this terminal, so these files are a
+        # duplicate; name the directory so it can be removed rather than
+        # accumulating one full build log per invocation.
+        print(f"Logs: {Path(result.logs.stdout[0]).parent}")
 
     sys.exit(0 if result.success else 1)
 

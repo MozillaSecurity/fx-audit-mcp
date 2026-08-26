@@ -6,7 +6,7 @@ import signal
 import tempfile
 from pathlib import Path
 
-from .logs import write_subprocess_logs
+from .logs import write_crash_logs
 from .models import JSShellCrashInfo
 
 
@@ -28,13 +28,11 @@ async def js_shell_evaluator(
     succeeded. Only an operational failure raises, when the shell could not be
     run to completion at all: a missing binary or a timeout.
 
-    Logs are never returned inline: the complete, untruncated stdout and
-    stderr are written to a fresh temporary directory and the returned
-    ``logs`` holds their paths, so they can be read, grepped and tailed with
-    file tools. That directory is never deleted; the caller owns it and is
-    responsible for removing it. Crash diagnostics arrive on stderr, whether a
-    sanitizer report or a bare ``Assertion failure:`` message, so on a crash
-    ``logs.crashdata`` names that same stderr file rather than a copy of it.
+    stdout and stderr are written to a fresh temporary directory and the
+    returned ``logs`` holds their paths. That directory is never deleted; the
+    caller owns it. Crash diagnostics arrive on stderr, whether a sanitizer
+    report or a bare ``Assertion failure:`` message, so on a crash
+    ``logs.crashdata`` names that same stderr file.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
@@ -87,7 +85,7 @@ async def js_shell_evaluator(
         crashed = killed_by_signal or has_sanitizer
         # Every crash puts its diagnostics on stderr, sanitizer report or bare
         # assertion message, so crashdata always names that file.
-        logs = write_subprocess_logs(
+        logs = write_crash_logs(
             stdout_bytes, stderr_bytes, crashdata=("stderr",) if crashed else ()
         )
 

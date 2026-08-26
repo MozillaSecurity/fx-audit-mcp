@@ -41,12 +41,14 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   Exceptions are allowed to bubble (FastMCP surfaces them as `isError=True`):
   tools raise `FileNotFoundError` for missing binaries, etc.
   Do not wrap tool bodies in catch-all `try/except Exception` blocks.
-- Every evaluator writes untruncated logs to a fresh temp directory and returns
-  their paths (a `LogPaths` of stderr/stdout/crashdata file lists) rather than
-  the contents, which the caller owns and must clean up. `browser_evaluator`
-  categorizes the files grizzly emitted (`_categorize_logs`); the
-  subprocess-based evaluators write their captured streams through
-  `write_subprocess_logs` in `logs.py`, byte-for-byte and never truncated.
+- Every tool writes untruncated logs to a fresh temp directory and returns
+  their paths rather than the contents, which the caller owns and must clean
+  up. The build tools return a `LogPaths` of stderr/stdout; the evaluators
+  return a `CrashLogPaths`, which adds crashdata, so a build never advertises
+  a crash field it cannot populate. `browser_evaluator` categorizes the files
+  grizzly emitted (`_categorize_logs`); the other tools write their captured
+  streams through `logs.py` (`write_logs` for builds, `write_crash_logs` for
+  the evaluators), byte-for-byte and never truncated.
   `crashdata` holds crash diagnostics, which is an ASAN/UBSAN report when there
   is one and otherwise the assertion or abort message; it repeats a path already
   listed under stderr or stdout rather than writing a second copy. The JS shell
@@ -58,9 +60,10 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   line at a time (`_scan_lines`) and never holds a whole log in memory. Two
   trade-offs remain: `report_size_limit=0` means grizzly parses whole logs in
   memory when matching ignored signatures — swap in a large finite limit if that
-  ever OOMs — and the subprocess-based evaluators still buffer a run's entire
-  output through `communicate()` before writing it, so they bound response size
-  but not peak RAM.
+  ever OOMs — and the other tools still buffer a run's entire output in memory
+  before writing it, so they bound response size but not peak RAM.
+  `build_firefox` is the one that could avoid this: `stream_process_output`
+  already hands it each chunk, so it could write as it reads.
 - Long-running tools should stream subprocess output through `ctx` when a
   request context is available and capture the output for their return model;
   without a context, they should write output directly to stdout/stderr.

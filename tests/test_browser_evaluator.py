@@ -26,17 +26,17 @@ from fx_audit_mcp.browser_evaluator import (
     browser_evaluator,
     package_testcase,
 )
-from fx_audit_mcp.models import LogPaths
+from fx_audit_mcp.models import CrashLogPaths
 
 be_module = sys.modules["fx_audit_mcp.browser_evaluator"]
 
 
 def _write_grizzly_logs(
     log_dir: Path, stderr: str = "", crashdata: str = ""
-) -> LogPaths:
+) -> CrashLogPaths:
     """Lay out log text as grizzly log files and return their categorized paths.
 
-    Routes through _categorize_logs() rather than building a LogPaths by hand so
+    Routes through _categorize_logs() rather than building a CrashLogPaths by hand so
     the tests exercise the real filename routing. An empty string writes no
     file, which is how a run with no such log is expressed.
     """
@@ -81,13 +81,13 @@ class TestExtractCrashPids:
 class TestCategorizeLogs:
     def test_empty_directory(self, tmp_path: Path) -> None:
         """Every category is empty when the directory holds no log files."""
-        assert _categorize_logs(tmp_path) == LogPaths()
+        assert _categorize_logs(tmp_path) == CrashLogPaths()
 
     def test_routes_by_filename(self, tmp_path: Path) -> None:
         """Route log files to stderr, stdout, or crashdata based on filename."""
         for name in ("log_stderr.txt", "log_stdout.txt", "log_asan.txt"):
             (tmp_path / name).write_text(name)
-        assert _categorize_logs(tmp_path) == LogPaths(
+        assert _categorize_logs(tmp_path) == CrashLogPaths(
             stderr=[str(tmp_path / "log_stderr.txt")],
             stdout=[str(tmp_path / "log_stdout.txt")],
             crashdata=[str(tmp_path / "log_asan.txt")],
