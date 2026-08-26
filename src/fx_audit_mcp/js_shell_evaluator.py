@@ -6,9 +6,8 @@ import signal
 import tempfile
 from pathlib import Path
 
-from .models import JSShellCrashInfo, Logs
-
-MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
+from .logs import write_subprocess_logs
+from .models import JSShellCrashInfo
 
 
 async def js_shell_evaluator(
@@ -23,10 +22,19 @@ async def js_shell_evaluator(
 
     Always runs the shell with ``--fuzzing-safe``. A crash is reported when
     the shell exits via signal (negative exit code) or when
-    ``AddressSanitizer`` / ``UndefinedBehaviorSanitizer`` appears in stderr;
-    JS errors (positive non-zero exit) are not treated as crashes. Timed-out
-    processes are killed and raise TimeoutError. Captured stdout/stderr are
-    tail-truncated to MAX_LOG_SIZE.
+    ``AddressSanitizer`` / ``UndefinedBehaviorSanitizer`` appears in stderr.
+    A JS error (positive non-zero exit) is not a crash but is still a result:
+    it returns ``crashed: false`` with the shell's output, since the run itself
+    succeeded. Only an operational failure raises, when the shell could not be
+    run to completion at all: a missing binary or a timeout.
+
+    Logs are never returned inline: the complete, untruncated stdout and
+    stderr are written to a fresh temporary directory and the returned
+    ``logs`` holds their paths, so they can be read, grepped and tailed with
+    file tools. That directory is never deleted; the caller owns it and is
+    responsible for removing it. Crash diagnostics arrive on stderr, whether a
+    sanitizer report or a bare ``Assertion failure:`` message, so on a crash
+    ``logs.crashdata`` names that same stderr file rather than a copy of it.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
@@ -44,9 +52,7 @@ async def js_shell_evaluator(
         raise FileNotFoundError(f"JS shell binary not found at {js_binary}")
 
     with tempfile.TemporaryDirectory(prefix="fx_audit_js_") as tmp_dir:
-        fd, tmp_path = tempfile.mkstemp(suffix=".js", dir=tmp_dir)
-        testcase_path = Path(tmp_path)
-        os.close(fd)
+        testcase_path = Path(tmp_dir) / "testcase.js"
         testcase_path.write_text(content, encoding="utf-8")
 
         proc = await asyncio.create_subprocess_exec(
@@ -68,14 +74,8 @@ async def js_shell_evaluator(
             await proc.communicate()
             raise TimeoutError(f"JS shell timed out after {timeout}s") from None
 
-        stdout_raw = stdout_bytes.decode("utf-8", errors="replace")
-        stderr_raw = stderr_bytes.decode("utf-8", errors="replace")
-        stdout = (
-            stdout_raw[-MAX_LOG_SIZE:] if len(stdout_raw) > MAX_LOG_SIZE else stdout_raw
-        )
-        stderr = (
-            stderr_raw[-MAX_LOG_SIZE:] if len(stderr_raw) > MAX_LOG_SIZE else stderr_raw
-        )
+        # Only stderr is decoded; the logs are written from the raw bytes.
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
         exit_code = proc.returncode
 
         # Detect crash: killed by signal or ASAN/UBSAN in stderr
@@ -85,17 +85,22 @@ async def js_shell_evaluator(
         )
 
         crashed = killed_by_signal or has_sanitizer
+        # Every crash puts its diagnostics on stderr, sanitizer report or bare
+        # assertion message, so crashdata always names that file.
+        logs = write_subprocess_logs(
+            stdout_bytes, stderr_bytes, crashdata=("stderr",) if crashed else ()
+        )
 
         if not crashed:
-            msg = (
-                f"JS shell exited with code {exit_code} (JS error, not a crash)"
-                if exit_code != 0
-                else "No crash detected"
-            )
             return JSShellCrashInfo(
                 crashed=False,
-                message=msg,
-                logs=Logs(stderr=stderr, stdout=stdout),
+                message=(
+                    f"No crash detected - JS shell exited with code {exit_code}"
+                    " (JS error, not a crash)"
+                    if exit_code != 0
+                    else "No crash detected"
+                ),
+                logs=logs,
             )
 
         signal_name = ""
@@ -111,9 +116,5 @@ async def js_shell_evaluator(
             crashed=True,
             message=f"Crash detected{signal_name}",
             files={testcase_path.name: content},
-            logs=Logs(
-                stderr=stderr,
-                stdout=stdout,
-                crashdata=stderr,  # ASAN output goes to stderr
-            ),
+            logs=logs,
         )

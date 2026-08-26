@@ -19,6 +19,7 @@ from grizzly.target.firefox_target import FirefoxTarget
 from prefpicker import PrefPicker
 from sapphire import Sapphire
 
+from .logs import LOG_DIR_PREFIX
 from .models import BrowserCrashInfo, LogPaths
 
 if TYPE_CHECKING:
@@ -514,7 +515,7 @@ async def browser_evaluator(  # pragma: no cover
     target.process_assets()
 
     # Never removed by this module - the caller owns it.
-    log_dir = Path(tempfile.mkdtemp(prefix="fx_audit_logs_"))
+    log_dir = Path(tempfile.mkdtemp(prefix=LOG_DIR_PREFIX))
 
     results = []
     try:
@@ -535,7 +536,6 @@ async def browser_evaluator(  # pragma: no cover
                     )
                 except TargetLaunchTimeout:
                     if target.launch_timeout_report is not None:
-                        # Copy before the finally block rmtree()s the report dir.
                         copytree(
                             target.launch_timeout_report.path,
                             log_dir,

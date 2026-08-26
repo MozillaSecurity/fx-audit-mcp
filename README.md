@@ -130,18 +130,24 @@ agent = Agent(
 
 ## Crash Detection
 
+Every evaluator writes complete logs to a fresh temp directory each run and
+returns their paths in `logs` (grouped into `stderr`/`stdout`/`crashdata`)
+instead of the contents, so they can be grepped rather than truncated to fit.
+The directory is never deleted and logs are unbounded, so callers should clean
+up — take the parent of any returned path. The returned paths are only
+meaningful to a client sharing a filesystem with the server.
+
 - **browser_evaluator**: Crash signatures in `ignored_signatures/` (FuzzManager
   format) are filtered out before returning, so common shutdown hangs don't
-  pollute results. Complete logs are written to a fresh temp directory each
-  run and `logs` returns their paths (grouped into `stderr`/`stdout`/
-  `crashdata`) instead of the contents, so they can be grepped rather than
-  truncated to fit. The directory is never deleted and logs are unbounded, so
-  callers should clean up — take the parent of any returned path. The returned
-  paths are only meaningful to a client sharing a filesystem with the server.
+  pollute results. The ASAN report is in `crashdata`
+  (`log_ffp_asan_<pid>.txt`), not `stderr`.
 - **js_shell_evaluator**: Detects crashes via negative exit code (signal) or
   `AddressSanitizer`/`UndefinedBehaviorSanitizer` in stderr. JS errors (positive
-  exit codes) are not treated as crashes.
-- **nss_gtest_evaluator**: Detects `AddressSanitizer` in stdout or stderr.
+  exit codes) are not treated as crashes. The report arrives on stderr, so
+  `crashdata` names that same stderr file; a signal-only crash leaves
+  `crashdata` empty.
+- **nss_gtest_evaluator**: Detects `AddressSanitizer` in stdout or stderr, and
+  `crashdata` names whichever of those files carried the report.
 
 ## Development
 

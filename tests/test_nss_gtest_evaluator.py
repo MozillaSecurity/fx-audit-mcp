@@ -42,10 +42,14 @@ async def test_asan_in_stdout_signals_crash(
         mocker,
         returncode=1,
         stdout=b"==1==ERROR: AddressSanitizer: heap-use-after-free\n",
+        stderr=b"[ RUN      ] Suite.Test\n",
     )
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
     result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
     assert result.crashed is True
+    # Both streams have content, so crashdata must follow the reporting one
+    # rather than simply listing every file written.
+    assert result.logs.crashdata == result.logs.stdout
 
 
 @pytest.mark.anyio
@@ -55,22 +59,30 @@ async def test_asan_in_stderr_signals_crash(
     proc = _mock_proc(
         mocker,
         returncode=1,
+        stdout=b"[ RUN      ] Suite.Test\n",
         stderr=b"AddressSanitizer: stack-buffer-overflow\n",
     )
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
     result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
     assert result.crashed is True
+    assert result.logs.crashdata == result.logs.stderr
 
 
 @pytest.mark.anyio
 async def test_nonzero_exit_without_asan_is_gtest_error(
     mocker: MockerFixture, firefox_dir: Path
 ) -> None:
-    proc = _mock_proc(mocker, returncode=1, stdout=b"[ FAILED ]\n")
+    """Verify that a failing gtest returns its output rather than raising."""
+    proc = _mock_proc(mocker, returncode=1, stdout=b"[ FAILED ] Suite.Test\n")
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
+
     result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
+
     assert result.crashed is False
-    assert "Gtest error" in result.message
+    assert "gtest failure" in result.message
+    assert result.logs.crashdata == []
+    stdout_log = Path(result.logs.stdout[0]).read_bytes()
+    assert stdout_log == b"[ FAILED ] Suite.Test\n"
 
 
 @pytest.mark.anyio

@@ -13,21 +13,6 @@ class ToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Logs(ToolModel):
-    """Captured process logs from a tool invocation."""
-
-    stderr: str = Field(
-        description="Process stderr captured during the run.",
-    )
-    stdout: str = Field(
-        description="Process stdout captured during the run.",
-    )
-    crashdata: str = Field(
-        default="",
-        description="ASAN/UBSAN sanitizer output.",
-    )
-
-
 class LogPaths(ToolModel):
     """Paths to log files a tool invocation wrote to disk."""
 
@@ -36,12 +21,9 @@ class LogPaths(ToolModel):
         description=(
             "File paths, NOT log contents - read or grep these files to see "
             "the output. Absolute paths to the run's complete, untruncated "
-            "stderr logs (Gecko/MOZ_LOG output, including the "
-            "'++PROCESS [pid = N] ... [type = T]' child-process launch "
-            "records). Files can be very large, so prefer grep/head/tail over "
-            "reading a whole file. Consecutive duplicate lines may be "
-            "collapsed into a '[Previous line repeated N times]' marker. The "
-            "containing directory is not deleted by this tool."
+            "stderr logs. Files can be very large, so prefer grep/head/tail "
+            "over reading a whole file. The containing directory is not "
+            "deleted by this tool."
         ),
         examples=[["/tmp/fx_audit_logs_ab12cd34/log_stderr.txt"]],
     )
@@ -59,12 +41,11 @@ class LogPaths(ToolModel):
         default_factory=list,
         description=(
             "File paths, NOT log contents - read or grep these files to see "
-            "the output. Absolute paths to the run's sanitizer and crash "
-            "logs: the ASAN/UBSAN report lives here, not in stderr. One "
-            "log_ffp_asan_<pid>.txt per process that produced sanitizer "
-            "output, where the trailing number is that process's PID, plus "
-            "log_minidump_<n>.txt and log_ffp_worker_<name>.txt when present. "
-            "The containing directory is not deleted by this tool."
+            "the output. Absolute paths to the run's crash diagnostics: an "
+            "ASAN/UBSAN report, or a bare assertion/abort message when the "
+            "process died without one. A path also listed under stderr or "
+            "stdout means the diagnostics were written to that stream. The "
+            "containing directory is not deleted by this tool."
         ),
         examples=[["/tmp/fx_audit_logs_ab12cd34/log_ffp_asan_1234.txt"]],
     )
@@ -85,7 +66,15 @@ class BrowserCrashInfo(ToolModel):
         description=(
             "Paths to this run's complete, untruncated Firefox logs on disk, "
             "categorized into stderr/stdout/crashdata. The log contents are "
-            "NOT in this response - read or grep the listed files."
+            "NOT in this response - read or grep the listed files. stderr "
+            "holds the Gecko/MOZ_LOG output, including the "
+            "'++PROCESS [pid = N] ... [type = T]' child-process launch "
+            "records, and consecutive duplicate lines may be collapsed into a "
+            "'[Previous line repeated N times]' marker. crashdata holds one "
+            "log_ffp_asan_<pid>.txt per process that produced sanitizer "
+            "output, where the trailing number is that process's PID, plus "
+            "log_minidump_<n>.txt and log_ffp_worker_<name>.txt when present; "
+            "the ASAN report is there, not in stderr."
         ),
     )
     crashed_parent: bool | None = Field(
@@ -151,9 +140,15 @@ class JSShellCrashInfo(ToolModel):
         ),
         examples=[{"testcase.js": "var x = 1;"}],
     )
-    logs: Logs | None = Field(
-        default=None,
-        description="stderr/stdout/crashdata captured from the JS shell.",
+    logs: LogPaths = Field(
+        description=(
+            "Paths to this run's complete, untruncated JS shell logs on disk, "
+            "categorized into stderr/stdout/crashdata. The log contents are "
+            "NOT in this response - read or grep the listed files. The shell "
+            "writes its crash diagnostics to stderr, whether a sanitizer "
+            "report or a bare assertion message, so on a crash crashdata "
+            "lists that same stderr file."
+        ),
     )
 
 
@@ -168,9 +163,14 @@ class NSSGtestCrashInfo(ToolModel):
         description="Summary of the gtest run outcome.",
         examples=["ASan crash detected", "No crash detected"],
     )
-    logs: Logs | None = Field(
-        default=None,
-        description="stderr/stdout captured from the gtest run.",
+    logs: LogPaths = Field(
+        description=(
+            "Paths to this run's complete, untruncated all.sh logs on disk, "
+            "categorized into stderr/stdout/crashdata. The log contents are "
+            "NOT in this response - read or grep the listed files. The gtest "
+            "harness can write its sanitizer report to either stream, so "
+            "crashdata lists whichever of stdout/stderr carried it."
+        ),
     )
 
 

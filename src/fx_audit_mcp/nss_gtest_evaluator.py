@@ -4,7 +4,8 @@ import asyncio
 import os
 from pathlib import Path
 
-from .models import Logs, NSSGtestCrashInfo
+from .logs import write_subprocess_logs
+from .models import NSSGtestCrashInfo
 
 
 async def nss_gtest_evaluator(
@@ -17,12 +18,21 @@ async def nss_gtest_evaluator(
 
     Invokes ``security/nss/tests/all.sh`` with DOMSUF / HOST / NSS_TESTS /
     NSS_CYCLES / GTESTFILTER set. A crash is reported when
-    ``AddressSanitizer`` appears in stdout or stderr; a non-zero exit
-    without ASan output is a gtest failure, not a crash. Timed-out runs
-    are killed.
+    ``AddressSanitizer`` appears in stdout or stderr. A non-zero exit without
+    ASan output is a gtest failure, not a crash, but is still a result: it
+    returns ``crashed: false`` with the harness output, since the run itself
+    succeeded. Only an operational failure raises, when the harness could not
+    be run to completion at all: currently a timeout.
+
+    Logs are never returned inline: the complete, untruncated stdout and
+    stderr are written to a fresh temporary directory and the returned
+    ``logs`` holds their paths, so they can be read, grepped and tailed with
+    file tools. That directory is never deleted; the caller owns it and is
+    responsible for removing it.
 
     On ``crashed: false`` examine ``logs.stderr`` / ``logs.stdout`` for the
-    failure mode. On ``crashed: true`` the stack trace is in ``logs.stderr``.
+    failure mode. On ``crashed: true`` ``logs.crashdata`` names whichever of
+    those files carried the ASAN report.
 
     Args:
         gtest_name: GTest filter (e.g. ``SuiteName.TestName``) passed via
@@ -56,27 +66,32 @@ async def nss_gtest_evaluator(
         await process.communicate()
         raise TimeoutError(f"NSS GTest timed out after {timeout}s") from None
 
-    stdout_output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    stderr_output = stderr.decode("utf-8", errors="replace") if stderr else ""
+    stdout_bytes = stdout or b""
+    stderr_bytes = stderr or b""
+    stdout_output = stdout_bytes.decode("utf-8", errors="replace")
+    stderr_output = stderr_bytes.decode("utf-8", errors="replace")
 
-    if "AddressSanitizer" in stdout_output or "AddressSanitizer" in stderr_output:
+    asan_streams = tuple(
+        name
+        for name, text in (("stdout", stdout_output), ("stderr", stderr_output))
+        if "AddressSanitizer" in text
+    )
+    logs = write_subprocess_logs(stdout_bytes, stderr_bytes, crashdata=asan_streams)
+
+    if asan_streams:
         return NSSGtestCrashInfo(
             crashed=True,
             message="ASan crash detected",
-            logs=Logs(stdout=stdout_output, stderr=stderr_output),
-        )
-
-    if process.returncode == 0:
-        return NSSGtestCrashInfo(
-            crashed=False,
-            message="No crash detected",
-            logs=Logs(stdout=stdout_output, stderr=stderr_output),
+            logs=logs,
         )
 
     return NSSGtestCrashInfo(
         crashed=False,
         message=(
-            f"Gtest exited with code {process.returncode} (Gtest error, not a crash)"
+            f"No crash detected - gtest exited with code {process.returncode}"
+            " (gtest failure, not a crash)"
+            if process.returncode != 0
+            else "No crash detected"
         ),
-        logs=Logs(stdout=stdout_output, stderr=stderr_output),
+        logs=logs,
     )

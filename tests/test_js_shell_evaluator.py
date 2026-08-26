@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from fx_audit_mcp.js_shell_evaluator import MAX_LOG_SIZE, js_shell_evaluator
+from fx_audit_mcp.js_shell_evaluator import js_shell_evaluator
 
 
 def _mock_proc(
@@ -82,10 +82,16 @@ async def test_ubsan_in_stderr(mocker: MockerFixture, js_binary: Path) -> None:
 async def test_positive_nonzero_exit_is_js_error_not_crash(
     mocker: MockerFixture, js_binary: Path
 ) -> None:
-    _mock_proc(mocker, returncode=3, stderr=b"SyntaxError\n")
+    """Verify that a rejected testcase returns its output rather than raising."""
+    _mock_proc(mocker, returncode=3, stderr=b"SyntaxError: unexpected token\n")
+
     result = await js_shell_evaluator("(", js_binary)
+
     assert result.crashed is False
     assert "JS error" in result.message
+    assert result.logs.crashdata == []
+    stderr_log = Path(result.logs.stderr[0]).read_bytes()
+    assert stderr_log == b"SyntaxError: unexpected token\n"
 
 
 @pytest.mark.anyio
@@ -103,20 +109,63 @@ async def test_timeout_kills_and_raises(mocker: MockerFixture, js_binary: Path) 
 
 
 @pytest.mark.anyio
-async def test_stdout_stderr_are_tail_truncated(
+async def test_logs_are_written_to_disk_untruncated(
     mocker: MockerFixture, js_binary: Path
 ) -> None:
-    long = b"abcdefghij" * (MAX_LOG_SIZE // 10 + 100)
+    long = b"abcdefghij" * 400_000
     crash_marker = b"AddressSanitizer\n"
     _mock_proc(mocker, returncode=-11, stdout=long, stderr=long + crash_marker)
 
     result = await js_shell_evaluator("x", js_binary)
 
-    assert result.logs is not None
-    assert len(result.logs.stdout) == MAX_LOG_SIZE
-    assert len(result.logs.stderr) == MAX_LOG_SIZE
-    # tail-truncated: the end of the original input must remain
-    assert result.logs.stderr.endswith("AddressSanitizer\n")
+    assert Path(result.logs.stdout[0]).read_bytes() == long
+    assert Path(result.logs.stderr[0]).read_bytes() == long + crash_marker
+
+
+@pytest.mark.anyio
+async def test_crashdata_points_at_the_stderr_log(
+    mocker: MockerFixture, js_binary: Path
+) -> None:
+    _mock_proc(
+        mocker,
+        returncode=-11,
+        stderr=b"==1==ERROR: AddressSanitizer: heap-buffer-overflow\n",
+    )
+
+    result = await js_shell_evaluator("oob()", js_binary)
+
+    assert result.logs.crashdata == result.logs.stderr
+    report = Path(result.logs.crashdata[0]).read_text(encoding="utf-8")
+    assert "AddressSanitizer" in report
+
+
+@pytest.mark.anyio
+async def test_assertion_abort_still_reports_crashdata(
+    mocker: MockerFixture, js_binary: Path
+) -> None:
+    """Verify that a MOZ_ASSERT abort exposes its message, with no sanitizer marker."""
+    assertion = (
+        b"Assertion failure: obj->is<JSFunction>(), at js/src/vm/JSObject.cpp:1\n"
+    )
+    _mock_proc(mocker, returncode=-6, stderr=assertion)
+
+    result = await js_shell_evaluator("boom()", js_binary)
+
+    assert result.crashed is True
+    assert result.logs.crashdata == result.logs.stderr
+    assert Path(result.logs.crashdata[0]).read_bytes() == assertion
+
+
+@pytest.mark.anyio
+async def test_captured_testcase_uses_a_stable_name(
+    mocker: MockerFixture, js_binary: Path
+) -> None:
+    """Verify that the reported testcase filename is not a random temp name."""
+    _mock_proc(mocker, returncode=-11, stderr=b"AddressSanitizer\n")
+
+    result = await js_shell_evaluator("boom()", js_binary)
+
+    assert result.files == {"testcase.js": "boom()"}
 
 
 @pytest.mark.anyio
