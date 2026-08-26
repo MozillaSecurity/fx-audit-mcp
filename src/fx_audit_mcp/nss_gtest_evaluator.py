@@ -78,15 +78,8 @@ async def nss_gtest_evaluator(
     asan_streams = tuple(name for name, text in streams if "AddressSanitizer" in text)
     logs = write_crash_logs(stdout_bytes, stderr_bytes, crashdata=asan_streams)
 
-    if asan_streams:
-        return NSSGtestCrashInfo(
-            crashed=True,
-            exit_code=process.returncode,
-            logs=logs,
-        )
-
     return NSSGtestCrashInfo(
-        crashed=False,
+        crashed=bool(asan_streams),
         exit_code=process.returncode,
         logs=logs,
     )

@@ -103,15 +103,8 @@ async def js_shell_evaluator(
             crashdata=("stderr",) if crashed and stderr_bytes else (),
         )
 
-        if not crashed:
-            return JSShellCrashInfo(
-                crashed=False,
-                exit_code=exit_code,
-                logs=logs,
-            )
-
         return JSShellCrashInfo(
-            crashed=True,
+            crashed=crashed,
             exit_code=exit_code,
             logs=logs,
         )
