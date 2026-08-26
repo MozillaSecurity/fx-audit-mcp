@@ -27,6 +27,7 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   test_js_shell_evaluator.py
   test_logs.py
   test_mcp_server.py
+  test_models.py
   test_nss_gtest_evaluator.py
   test_process_output.py
 ```
