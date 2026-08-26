@@ -35,7 +35,7 @@ async def test_successful_build(mocker: MockerFixture, tmp_path: Path) -> None:
     result = await build_nss(firefox)
 
     assert result.success is True
-    assert result.message == "NSS build completed successfully"
+    assert result.exit_code == 0
     assert result.build_dir == str(
         firefox / "security" / "nss" / ".." / "dist" / "Debug"
     )
@@ -52,7 +52,7 @@ async def test_failed_build_surfaces_exit_code(
     result = await build_nss(firefox)
 
     assert result.success is False
-    assert "exit code 2" in result.message
+    assert result.exit_code == 2
     assert Path(result.logs.stderr[0]).read_bytes() == b"link error\n"
 
 

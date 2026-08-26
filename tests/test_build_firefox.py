@@ -108,7 +108,7 @@ async def test_successful_build(mocker: MockerFixture, tmp_path: Path) -> None:
 
     assert result.success is True
     assert result.build_dir == _DUMMY_OBJDIR
-    assert result.message == "Firefox build completed successfully"
+    assert result.exit_code == 0
     assert Path(result.logs.stdout[0]).read_bytes() == b"Build succeeded\n"
     assert Path(result.logs.stderr[0]).read_bytes() == b"Warning: something\n"
 
@@ -129,7 +129,7 @@ async def test_failed_build(mocker: MockerFixture, tmp_path: Path) -> None:
     result = await build_firefox(firefox_dir, mozconfig)
 
     assert result.success is False
-    assert "failed with exit code 1" in result.message
+    assert result.exit_code == 1
     assert Path(result.logs.stdout[0]).read_bytes() == b"Build output\n"
     assert Path(result.logs.stderr[0]).read_bytes() == b"Error: build failed\n"
 
@@ -439,7 +439,7 @@ class TestMain:
             ],
         )
         result_obj: MagicMock = mocker.MagicMock(
-            success=False, build_dir=None, stdout="out", stderr="err", message="failed"
+            success=False, build_dir=None, exit_code=1
         )
 
         async def _fake_build(*_args: object, **_kwargs: object) -> MagicMock:
@@ -471,9 +471,7 @@ class TestMain:
         result_obj: MagicMock = mocker.MagicMock(
             success=True,
             build_dir="/path/to/obj",
-            stdout="out",
-            stderr="err",
-            message="ok",
+            exit_code=0,
         )
 
         async def _fake_build(*_args: object, **_kwargs: object) -> MagicMock:

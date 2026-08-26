@@ -64,6 +64,8 @@ async def nss_gtest_evaluator(
         await process.communicate()
         raise TimeoutError(f"NSS GTest timed out after {timeout}s") from None
 
+    # communicate() only returns once the process has exited.
+    assert process.returncode is not None
     stdout_bytes = stdout or b""
     stderr_bytes = stderr or b""
     stdout_output = stdout_bytes.decode("utf-8", errors="replace")
@@ -79,17 +81,12 @@ async def nss_gtest_evaluator(
     if asan_streams:
         return NSSGtestCrashInfo(
             crashed=True,
-            message="ASan crash detected",
+            exit_code=process.returncode,
             logs=logs,
         )
 
     return NSSGtestCrashInfo(
         crashed=False,
-        message=(
-            f"No crash detected - gtest exited with code {process.returncode}"
-            " (gtest failure, not a crash)"
-            if process.returncode != 0
-            else "No crash detected"
-        ),
+        exit_code=process.returncode,
         logs=logs,
     )

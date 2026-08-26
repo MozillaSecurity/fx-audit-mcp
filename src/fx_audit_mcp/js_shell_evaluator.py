@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import signal
 import tempfile
 from pathlib import Path
 
@@ -74,10 +73,12 @@ async def js_shell_evaluator(
 
         # Only stderr is decoded; the logs are written from the raw bytes.
         stderr = stderr_bytes.decode("utf-8", errors="replace")
+        # communicate() only returns once the process has exited.
+        assert proc.returncode is not None
         exit_code = proc.returncode
 
         # Detect crash: killed by signal or ASAN/UBSAN in stderr
-        killed_by_signal = exit_code is not None and exit_code < 0
+        killed_by_signal = exit_code < 0
         has_sanitizer = (
             "AddressSanitizer" in stderr or "UndefinedBehaviorSanitizer" in stderr
         )
@@ -92,27 +93,13 @@ async def js_shell_evaluator(
         if not crashed:
             return JSShellCrashInfo(
                 crashed=False,
-                message=(
-                    f"No crash detected - JS shell exited with code {exit_code}"
-                    " (JS error, not a crash)"
-                    if exit_code != 0
-                    else "No crash detected"
-                ),
+                exit_code=exit_code,
                 logs=logs,
             )
 
-        signal_name = ""
-        if killed_by_signal and exit_code is not None:
-            sig_num = -exit_code
-            try:
-                sig = signal.Signals(sig_num)
-                signal_name = f" (signal {sig.name})"
-            except ValueError:
-                signal_name = f" (signal {sig_num})"
-
         return JSShellCrashInfo(
             crashed=True,
-            message=f"Crash detected{signal_name}",
+            exit_code=exit_code,
             files={testcase_path.name: content},
             logs=logs,
         )

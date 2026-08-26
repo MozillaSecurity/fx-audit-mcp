@@ -221,18 +221,20 @@ async def build_firefox(
         raise
 
     await process.wait()
+    # wait() has returned, so the process has exited.
+    assert process.returncode is not None
     logs = write_logs(stdout_output, stderr_output)
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=build_dir,
-            message="Firefox build completed successfully",
+            exit_code=process.returncode,
             logs=logs,
         )
 
     return BuildResult(
         success=False,
-        message=f"Firefox build failed with exit code {process.returncode}",
+        exit_code=process.returncode,
         logs=logs,
     )
 
@@ -254,7 +256,7 @@ def main() -> None:
     result = asyncio.run(build_firefox(args.firefox_dir, mozconfig_path))
 
     print(f"Success: {result.success}")
-    print(f"Message: {result.message}")
+    print(f"Exit code: {result.exit_code}")
     if result.build_dir:
         print(f"Build dir: {result.build_dir}")
     if result.logs.stdout:

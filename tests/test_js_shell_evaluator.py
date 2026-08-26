@@ -31,7 +31,7 @@ async def test_clean_exit_reports_no_crash(
     _mock_proc(mocker, returncode=0, stdout=b"42\n")
     result = await js_shell_evaluator("print(42)", js_binary)
     assert result.crashed is False
-    assert result.message == "No crash detected"
+    assert result.exit_code == 0
 
 
 @pytest.mark.anyio
@@ -41,7 +41,7 @@ async def test_negative_exit_code_signals_crash(
     _mock_proc(mocker, returncode=-11, stderr=b"")
     result = await js_shell_evaluator("crash()", js_binary)
     assert result.crashed is True
-    assert "SIGSEGV" in result.message
+    assert result.exit_code == -11
 
 
 @pytest.mark.anyio
@@ -51,7 +51,7 @@ async def test_unknown_signal_falls_back_to_number(
     _mock_proc(mocker, returncode=-999, stderr=b"")
     result = await js_shell_evaluator("x", js_binary)
     assert result.crashed is True
-    assert "999" in result.message
+    assert result.exit_code == -999
 
 
 @pytest.mark.anyio
@@ -88,7 +88,7 @@ async def test_positive_nonzero_exit_is_js_error_not_crash(
     result = await js_shell_evaluator("(", js_binary)
 
     assert result.crashed is False
-    assert "JS error" in result.message
+    assert result.exit_code == 3
     assert result.logs.crashdata == []
     stderr_log = Path(result.logs.stderr[0]).read_bytes()
     assert stderr_log == b"SyntaxError: unexpected token\n"

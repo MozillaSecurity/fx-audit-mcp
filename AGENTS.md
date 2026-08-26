@@ -64,6 +64,10 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   before writing it, so they bound response size but not peak RAM.
   `build_firefox` is the one that could avoid this: `stream_process_output`
   already hands it each chunk, so it could write as it reads.
+- Tools report the subprocess exit status as `exit_code` rather than narrating
+  it in prose; a negative value means killed by that signal. `browser_evaluator`
+  is the exception and keeps `message`: grizzly owns the process, so there is no
+  exit status to report.
 - Long-running tools should stream subprocess output through `ctx` when a
   request context is available and capture the output for their return model;
   without a context, they should write output directly to stdout/stderr.

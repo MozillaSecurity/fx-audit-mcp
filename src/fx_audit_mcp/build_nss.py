@@ -62,18 +62,20 @@ async def build_nss(firefox_dir: Path) -> BuildResult:
     )
 
     stdout, stderr = await process.communicate()
+    # communicate() only returns once the process has exited.
+    assert process.returncode is not None
     logs = write_logs(stdout or b"", stderr or b"")
 
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=str(build_dir),
-            message="NSS build completed successfully",
+            exit_code=process.returncode,
             logs=logs,
         )
 
     return BuildResult(
         success=False,
-        message=f"NSS build failed with exit code {process.returncode}",
+        exit_code=process.returncode,
         logs=logs,
     )

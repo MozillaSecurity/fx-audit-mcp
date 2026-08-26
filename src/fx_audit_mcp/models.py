@@ -120,9 +120,9 @@ class JSShellCrashInfo(ToolModel):
         description="True if the JS shell crashed while running the testcase.",
         examples=[True, False],
     )
-    message: str = Field(
-        description="Summary of the JS shell run outcome.",
-        examples=["Crash detected (signal SIGSEGV)", "No crash detected"],
+    exit_code: int = Field(
+        description="Exit status. On POSIX, negative means killed by that signal.",
+        examples=[0, 1, -11],
     )
     files: dict[str, str] | None = Field(
         default=None,
@@ -148,9 +148,9 @@ class NSSGtestCrashInfo(ToolModel):
         description="True if AddressSanitizer detected a crash.",
         examples=[True, False],
     )
-    message: str = Field(
-        description="Summary of the gtest run outcome.",
-        examples=["ASan crash detected", "No crash detected"],
+    exit_code: int = Field(
+        description="Exit status. On POSIX, negative means killed by that signal.",
+        examples=[0, 1, -11],
     )
     logs: CrashLogPaths = Field(
         description=(
@@ -168,12 +168,9 @@ class BuildResult(ToolModel):
         description="True if the build completed successfully.",
         examples=[True, False],
     )
-    message: str = Field(
-        description="Summary of the build outcome.",
-        examples=[
-            "Firefox build completed successfully",
-            "Firefox build failed with exit code 1",
-        ],
+    exit_code: int = Field(
+        description="Exit status. On POSIX, negative means killed by that signal.",
+        examples=[0, 1, -11],
     )
     build_dir: str | None = Field(
         default=None,

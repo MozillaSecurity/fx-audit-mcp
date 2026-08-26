@@ -31,7 +31,7 @@ async def test_clean_run_reports_no_crash(
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
     result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
     assert result.crashed is False
-    assert result.message == "No crash detected"
+    assert result.exit_code == 0
 
 
 @pytest.mark.anyio
@@ -79,7 +79,7 @@ async def test_nonzero_exit_without_asan_is_gtest_error(
     result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
 
     assert result.crashed is False
-    assert "gtest failure" in result.message
+    assert result.exit_code == 1
     assert result.logs.crashdata == []
     stdout_log = Path(result.logs.stdout[0]).read_bytes()
     assert stdout_log == b"[ FAILED ] Suite.Test\n"
