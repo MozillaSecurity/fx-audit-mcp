@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 from grizzly.common import storage as grizzly_storage
 from grizzly.common import utils as grizzly_utils
+from grizzly.target import TargetLaunchTimeout
 from grizzly.target.firefox_target import FirefoxTarget
+from pytest_mock import MockerFixture
 
 from fx_audit_mcp.browser_evaluator import (
     PREF_BLOCKLIST_ENV,
@@ -25,6 +27,7 @@ from fx_audit_mcp.browser_evaluator import (
     browser_evaluator,
     package_testcase,
 )
+from fx_audit_mcp.logs import LOG_DIR_PREFIX
 from fx_audit_mcp.models import CrashLogPaths
 
 be_module = sys.modules["fx_audit_mcp.browser_evaluator"]
@@ -420,6 +423,34 @@ class TestBrowserEvaluator:
         # The binary check must stay ahead of the mkdtemp() call, or every
         # missing-binary call strands an empty directory.
         assert not list(temp_root.iterdir())
+
+    @pytest.mark.anyio
+    async def test_launch_timeout_removes_empty_log_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        """A launch timeout with no report leaves no empty log directory behind."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.side_effect = TargetLaunchTimeout
+
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        with pytest.raises(TimeoutError, match="failed to launch"):
+            await browser_evaluator(
+                file_paths={"test.html": testcase_file},
+                entry_point="test.html",
+                firefox_binary=firefox_binary,
+            )
+        assert not list(temp_root.glob(f"{LOG_DIR_PREFIX}*"))
 
 
 class TestExtractChildPtypes:

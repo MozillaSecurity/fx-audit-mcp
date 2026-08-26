@@ -487,7 +487,7 @@ async def browser_evaluator(  # pragma: no cover
     # Process assets (prefs, etc.) - required for Firefox to launch properly
     target.process_assets()
 
-    # Never removed by this module - the caller owns it.
+    # Removed below only if it ends up empty - otherwise the caller owns it.
     log_dir = Path(tempfile.mkdtemp(prefix=LOG_DIR_PREFIX))
 
     results = []
@@ -562,3 +562,6 @@ async def browser_evaluator(  # pragma: no cover
         target.cleanup()
         for result_obj in results:
             result_obj.report.cleanup()
+        # Remove log_dir if empty
+        if not any(log_dir.iterdir()):
+            log_dir.rmdir()
