@@ -422,6 +422,63 @@ class TestMain:
         assert exc_info.value.code == 1
         assert "--mozconfig" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            FileNotFoundError("MOZCONFIG file not found at /nope"),
+            RuntimeError("mach environment output missing topobjdir"),
+            json.JSONDecodeError("Expecting value", "", 0),
+        ],
+    )
+    def test_build_error_is_reported_without_a_traceback(
+        self,
+        mocker: MockerFixture,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        error: Exception,
+    ) -> None:
+        """main() prints the message for a bad invocation rather than raising."""
+        mc = tmp_path / "mc"
+        mc.touch()
+        mocker.patch(
+            "sys.argv",
+            [
+                "fx-audit-build-firefox",
+                "--firefox-dir",
+                str(tmp_path),
+                "--mozconfig",
+                str(mc),
+            ],
+        )
+        mocker.patch("fx_audit_mcp.build_firefox.build_firefox", side_effect=error)
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert str(error) in capsys.readouterr().err
+
+    def test_unexpected_error_keeps_its_traceback(
+        self, mocker: MockerFixture, tmp_path: Path
+    ) -> None:
+        """main() lets an error that isn't a bad invocation propagate."""
+        mc = tmp_path / "mc"
+        mc.touch()
+        mocker.patch(
+            "sys.argv",
+            [
+                "fx-audit-build-firefox",
+                "--firefox-dir",
+                str(tmp_path),
+                "--mozconfig",
+                str(mc),
+            ],
+        )
+        mocker.patch(
+            "fx_audit_mcp.build_firefox.build_firefox",
+            side_effect=ValueError("bug in the tool"),
+        )
+        with pytest.raises(ValueError, match="bug in the tool"):
+            main()
+
     def test_exits_nonzero_on_build_failure(
         self, mocker: MockerFixture, tmp_path: Path
     ) -> None:

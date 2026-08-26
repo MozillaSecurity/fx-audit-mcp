@@ -253,7 +253,11 @@ def main() -> None:
     print(f"Mozconfig:   {mozconfig_path}")
     print()
 
-    result = asyncio.run(build_firefox(args.firefox_dir, mozconfig_path))
+    try:
+        result = asyncio.run(build_firefox(args.firefox_dir, mozconfig_path))
+    except (FileNotFoundError, RuntimeError, json.JSONDecodeError) as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
 
     print(f"Success: {result.success}")
     print(f"Exit code: {result.exit_code}")
