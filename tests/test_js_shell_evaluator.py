@@ -89,20 +89,17 @@ async def test_positive_nonzero_exit_is_js_error_not_crash(
 
 
 @pytest.mark.anyio
-async def test_timeout_kills_and_returns_no_crash(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
+async def test_timeout_kills_and_raises(mocker: MockerFixture, js_binary: Path) -> None:
     proc: MagicMock = mocker.AsyncMock()
     proc.returncode = None
     proc.communicate = AsyncMock(side_effect=[TimeoutError, (b"", b"")])
     proc.kill = MagicMock()
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
 
-    result = await js_shell_evaluator("while(1){}", js_binary, timeout=1)
+    with pytest.raises(TimeoutError, match="timed out after 1s"):
+        await js_shell_evaluator("while(1){}", js_binary, timeout=1)
 
     proc.kill.assert_called_once()
-    assert result.crashed is False
-    assert "Timed out after 1s" in result.message
 
 
 @pytest.mark.anyio
@@ -123,10 +120,9 @@ async def test_stdout_stderr_are_tail_truncated(
 
 
 @pytest.mark.anyio
-async def test_missing_js_binary_returns_failure(tmp_path: Path) -> None:
-    result = await js_shell_evaluator("x", tmp_path / "missing")
-    assert result.crashed is False
-    assert "not found" in result.message
+async def test_missing_js_binary_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="not found"):
+        await js_shell_evaluator("x", tmp_path / "missing")
 
 
 @pytest.mark.anyio
@@ -148,13 +144,12 @@ async def test_extra_flags_are_passed_through(
 
 
 @pytest.mark.anyio
-async def test_subprocess_exception_returns_failure(
+async def test_subprocess_exception_raises(
     mocker: MockerFixture, js_binary: Path
 ) -> None:
     mocker.patch(
         "asyncio.create_subprocess_exec",
         side_effect=RuntimeError("spawn failed"),
     )
-    result = await js_shell_evaluator("x", js_binary)
-    assert result.crashed is False
-    assert "RuntimeError" in result.message
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        await js_shell_evaluator("x", js_binary)

@@ -128,6 +128,11 @@ async def build_firefox(
     The build output directory is determined automatically from the
     MOZCONFIG via ``mach environment`` and returned as ``build_dir``.
 
+    A build that runs and fails is a result, not an error: it returns
+    ``success: false`` with the compiler output. Only an operational failure
+    raises, when the build could not be started at all, such as a missing
+    source directory or MOZCONFIG.
+
     Args:
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
         mozconfig_path: Path to the MOZCONFIG file controlling build flags
@@ -138,107 +143,94 @@ async def build_firefox(
     Returns:
         BuildResult with ``build_dir`` set to the objdir on success.
     """
+    if not firefox_dir.exists():
+        raise FileNotFoundError(f"Firefox directory not found at {firefox_dir}")
+
+    if not mozconfig_path.exists():
+        raise FileNotFoundError(f"MOZCONFIG file not found at {mozconfig_path}")
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TASKCLUSTER_")}
+    env["MOZCONFIG"] = str(mozconfig_path.resolve())
+    env["CLAUDECODE"] = "1"
+
+    if sys.platform == "win32":
+        _windows_build_env(env)
+
+    py3 = which("python3", path=env["PATH"])
+    assert py3, "Couldn't find python3 executable in PATH"
+
+    build_dir = await _get_build_dir(py3, firefox_dir, env)
+
+    process = await asyncio.create_subprocess_exec(
+        py3,
+        "mach",
+        "build",
+        cwd=firefox_dir,
+        env=env,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    notifications_enabled = ctx is not None
+
+    async def emit_output(text: str, stream_name: str) -> None:
+        nonlocal notifications_enabled
+        if ctx is None:
+            destination = sys.stdout if stream_name == "stdout" else sys.stderr
+            try:
+                print(text, end="", file=destination, flush=True)
+            except (BrokenPipeError, UnicodeEncodeError):
+                notifications_enabled = False
+        elif notifications_enabled:
+            try:
+                await ctx.info(text, logger_name=f"mach.{stream_name}")
+            except Exception:
+                notifications_enabled = False
+
+    assert process.stdout is not None
+    assert process.stderr is not None
     try:
-        if not firefox_dir.exists():
-            return BuildResult(
-                success=False,
-                message=f"Firefox directory not found at {firefox_dir}",
-            )
-
-        if not mozconfig_path.exists():
-            return BuildResult(
-                success=False,
-                message=f"MOZCONFIG file not found at {mozconfig_path}",
-            )
-
-        env = {k: v for k, v in os.environ.items() if not k.startswith("TASKCLUSTER_")}
-        env["MOZCONFIG"] = str(mozconfig_path.resolve())
-        env["CLAUDECODE"] = "1"
-
-        if sys.platform == "win32":
-            _windows_build_env(env)
-
-        py3 = which("python3", path=env["PATH"])
-        assert py3, "Couldn't find python3 executable in PATH"
-
-        build_dir = await _get_build_dir(py3, firefox_dir, env)
-
-        process = await asyncio.create_subprocess_exec(
-            py3,
-            "mach",
-            "build",
-            cwd=firefox_dir,
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        stdout_output, stderr_output = await stream_process_output(
+            process.stdout,
+            process.stderr,
+            emit_output,
         )
-
-        notifications_enabled = ctx is not None
-
-        async def emit_output(text: str, stream_name: str) -> None:
-            nonlocal notifications_enabled
-            if ctx is None:
-                destination = sys.stdout if stream_name == "stdout" else sys.stderr
-                try:
-                    print(text, end="", file=destination, flush=True)
-                except (BrokenPipeError, UnicodeEncodeError):
-                    notifications_enabled = False
-            elif notifications_enabled:
-                try:
-                    await ctx.info(text, logger_name=f"mach.{stream_name}")
-                except Exception:
-                    notifications_enabled = False
-
-        assert process.stdout is not None
-        assert process.stderr is not None
-        try:
-            stdout_output, stderr_output = await stream_process_output(
-                process.stdout,
-                process.stderr,
-                emit_output,
-            )
-        except BaseException:
-            if process.returncode is None:
+    except BaseException:
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(
+                    process.wait(),
+                    timeout=PROCESS_TERMINATION_TIMEOUT,
+                )
+            except TimeoutError:
                 with suppress(ProcessLookupError):
-                    process.terminate()
-                try:
+                    process.kill()
+                with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(
                         process.wait(),
                         timeout=PROCESS_TERMINATION_TIMEOUT,
                     )
-                except TimeoutError:
-                    with suppress(ProcessLookupError):
-                        process.kill()
-                    with suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(
-                            process.wait(),
-                            timeout=PROCESS_TERMINATION_TIMEOUT,
-                        )
-            raise
+        raise
 
-        await process.wait()
-        if process.returncode == 0:
-            return BuildResult(
-                success=True,
-                build_dir=build_dir,
-                message="Firefox build completed successfully",
-                stdout=stdout_output,
-                stderr=stderr_output,
-            )
-
+    await process.wait()
+    if process.returncode == 0:
         return BuildResult(
-            success=False,
-            message=f"Firefox build failed with exit code {process.returncode}",
+            success=True,
+            build_dir=build_dir,
+            message="Firefox build completed successfully",
             stdout=stdout_output,
             stderr=stderr_output,
         )
 
-    except Exception as e:
-        return BuildResult(
-            success=False,
-            message=f"Error building Firefox: {type(e).__name__}: {e!s}",
-        )
+    return BuildResult(
+        success=False,
+        message=f"Firefox build failed with exit code {process.returncode}",
+        stdout=stdout_output,
+        stderr=stderr_output,
+    )
 
 
 def main() -> None:

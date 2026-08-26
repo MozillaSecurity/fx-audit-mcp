@@ -74,7 +74,7 @@ async def test_nonzero_exit_without_asan_is_gtest_error(
 
 
 @pytest.mark.anyio
-async def test_timeout_kills_and_returns_no_crash(
+async def test_timeout_kills_and_raises(
     mocker: MockerFixture, firefox_dir: Path
 ) -> None:
     proc: MagicMock = mocker.AsyncMock()
@@ -82,10 +82,9 @@ async def test_timeout_kills_and_returns_no_crash(
     proc.communicate = AsyncMock(side_effect=[TimeoutError, (b"", b"")])
     proc.kill = MagicMock()
     mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
-    result = await nss_gtest_evaluator("Suite.Test", firefox_dir, timeout=1)
+    with pytest.raises(TimeoutError, match="timed out after 1s"):
+        await nss_gtest_evaluator("Suite.Test", firefox_dir, timeout=1)
     proc.kill.assert_called_once()
-    assert result.crashed is False
-    assert "Timed out after 1s" in result.message
 
 
 @pytest.mark.anyio
@@ -106,14 +105,12 @@ async def test_env_passes_through_to_subprocess(
 
 
 @pytest.mark.anyio
-async def test_subprocess_exception_returns_failure(
+async def test_subprocess_exception_raises(
     mocker: MockerFixture, firefox_dir: Path
 ) -> None:
     mocker.patch(
         "asyncio.create_subprocess_exec",
         side_effect=OSError("Permission denied"),
     )
-    result = await nss_gtest_evaluator("Suite.Test", firefox_dir)
-    assert result.crashed is False
-    assert "OSError" in result.message
-    assert "Permission denied" in result.message
+    with pytest.raises(OSError, match="Permission denied"):
+        await nss_gtest_evaluator("Suite.Test", firefox_dir)

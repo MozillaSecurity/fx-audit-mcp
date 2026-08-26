@@ -534,36 +534,32 @@ async def browser_evaluator(  # pragma: no cover
                         expect_hang=False,
                     )
                 except TargetLaunchTimeout:
-                    if target.launch_timeout_report is None:
-                        raise
-                    # Copy before the finally block rmtree()s the report dir.
-                    copytree(
-                        target.launch_timeout_report.path,
-                        log_dir,
-                        dirs_exist_ok=True,
-                    )
-                    log_paths = _categorize_logs(log_dir)
-                    # A child process (content/GPU/etc.) can crash with ASAN
-                    # while the parent stays alive and the bootstrap times out.
-                    # Test file size rather than the crash PIDs: UBSAN reports
-                    # carry no ==pid==ERROR: marker, so a PID scan would miss
-                    # them here.
-                    if any(Path(path).stat().st_size for path in log_paths.crashdata):
-                        return BrowserCrashInfo(
-                            crashed=True,
-                            **_crashed_process_fields(log_paths, target.parent_pid),
-                            files={},
-                            logs=log_paths,
-                            message="Crash detected",
+                    if target.launch_timeout_report is not None:
+                        # Copy before the finally block rmtree()s the report dir.
+                        copytree(
+                            target.launch_timeout_report.path,
+                            log_dir,
+                            dirs_exist_ok=True,
                         )
-                    return BrowserCrashInfo(
-                        crashed=False,
-                        logs=log_paths,
-                        message=(
-                            "Firefox failed to launch within the timeout - "
-                            "check the logs for the underlying cause"
-                        ),
-                    )
+                        log_paths = _categorize_logs(log_dir)
+                        # A child process (content/GPU/etc.) can crash with ASAN
+                        # while the parent stays alive and the bootstrap times out.
+                        # Test file size rather than the crash PIDs: UBSAN reports
+                        # carry no ==pid==ERROR: marker, so a PID scan would miss
+                        # them here.
+                        if any(
+                            Path(path).stat().st_size for path in log_paths.crashdata
+                        ):
+                            return BrowserCrashInfo(
+                                crashed=True,
+                                **_crashed_process_fields(log_paths, target.parent_pid),
+                                files={},
+                                logs=log_paths,
+                                message="Crash detected",
+                            )
+                    raise TimeoutError(
+                        "Firefox failed to launch within the timeout"
+                    ) from None
 
         if not results:
             target.save_logs(log_dir)
