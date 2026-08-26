@@ -80,7 +80,9 @@ class TestExtractCrashPids:
 class TestCategorizeLogs:
     def test_empty_directory(self, tmp_path: Path) -> None:
         """Every category is empty when the directory holds no log files."""
-        assert _categorize_logs(tmp_path) == CrashLogPaths()
+        assert _categorize_logs(tmp_path) == CrashLogPaths(
+            stderr=[], stdout=[], crashdata=[]
+        )
 
     def test_routes_by_filename(self, tmp_path: Path) -> None:
         """Route log files to stderr, stdout, or crashdata based on filename."""
