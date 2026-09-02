@@ -59,9 +59,8 @@ async def test_failed_build_surfaces_exit_code(
 @pytest.mark.anyio
 async def test_missing_firefox_directory(mocker: MockerFixture, tmp_path: Path) -> None:
     spawn = mocker.patch("asyncio.create_subprocess_exec")
-    result = await build_nss(tmp_path / "no_firefox")
-    assert result.success is False
-    assert "Firefox directory not found" in result.message
+    with pytest.raises(FileNotFoundError, match="Firefox directory not found"):
+        await build_nss(tmp_path / "no_firefox")
     spawn.assert_not_called()
 
 
@@ -70,9 +69,8 @@ async def test_missing_nspr_directory(mocker: MockerFixture, tmp_path: Path) -> 
     firefox = tmp_path / "firefox"
     (firefox / "security" / "nss").mkdir(parents=True)
     spawn = mocker.patch("asyncio.create_subprocess_exec")
-    result = await build_nss(firefox)
-    assert result.success is False
-    assert "NSPR directory not found" in result.message
+    with pytest.raises(FileNotFoundError, match="NSPR directory not found"):
+        await build_nss(firefox)
     spawn.assert_not_called()
 
 
@@ -81,9 +79,8 @@ async def test_missing_nss_directory(mocker: MockerFixture, tmp_path: Path) -> N
     firefox = tmp_path / "firefox"
     (firefox / "nsprpub").mkdir(parents=True)
     spawn = mocker.patch("asyncio.create_subprocess_exec")
-    result = await build_nss(firefox)
-    assert result.success is False
-    assert "NSS directory not found" in result.message
+    with pytest.raises(FileNotFoundError, match="NSS directory not found"):
+        await build_nss(firefox)
     spawn.assert_not_called()
 
 
@@ -103,15 +100,14 @@ async def test_creates_nspr_symlink_for_nss_build(
 
 
 @pytest.mark.anyio
-async def test_subprocess_exception_returns_failure(
+async def test_subprocess_exception_propagates(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
+    """Verify that a spawn failure reaches the caller instead of a false result."""
     firefox = _layout(tmp_path)
     mocker.patch(
         "asyncio.create_subprocess_exec",
         side_effect=OSError("Permission denied"),
     )
-    result = await build_nss(firefox)
-    assert result.success is False
-    assert "OSError" in result.message
-    assert "Permission denied" in result.message
+    with pytest.raises(OSError, match="Permission denied"):
+        await build_nss(firefox)

@@ -159,30 +159,28 @@ async def test_cli_output_error_does_not_abort_build(
 
 @pytest.mark.anyio
 async def test_missing_firefox_directory(tmp_path: Path) -> None:
-    """Missing Firefox directory returns error without calling subprocess."""
+    """Missing Firefox directory raises without calling subprocess."""
     firefox_dir = tmp_path / "nonexistent"
     mozconfig = tmp_path / "mozconfig"
     mozconfig.touch()
 
-    result = await build_firefox(firefox_dir, mozconfig)
+    with pytest.raises(FileNotFoundError, match="Firefox directory not found") as exc:
+        await build_firefox(firefox_dir, mozconfig)
 
-    assert result.success is False
-    assert "Firefox directory not found" in result.message
-    assert str(firefox_dir) in result.message
+    assert str(firefox_dir) in str(exc.value)
 
 
 @pytest.mark.anyio
 async def test_missing_mozconfig(tmp_path: Path) -> None:
-    """Missing MOZCONFIG file returns error without calling subprocess."""
+    """Missing MOZCONFIG file raises without calling subprocess."""
     firefox_dir = tmp_path / "firefox"
     mozconfig = tmp_path / "nonexistent_mozconfig"
     firefox_dir.mkdir()
 
-    result = await build_firefox(firefox_dir, mozconfig)
+    with pytest.raises(FileNotFoundError, match="MOZCONFIG file not found") as exc:
+        await build_firefox(firefox_dir, mozconfig)
 
-    assert result.success is False
-    assert "MOZCONFIG file not found" in result.message
-    assert str(mozconfig) in result.message
+    assert str(mozconfig) in str(exc.value)
 
 
 @pytest.mark.anyio
@@ -527,6 +525,10 @@ async def test_calls_windows_build_env_on_win32(
     mocker.patch("pathlib.Path.exists", return_value=True)
     mocker.patch("sys.platform", "win32")
     helper: MagicMock = mocker.patch("fx_audit_mcp.build_firefox._windows_build_env")
+    # sys.platform is faked, so which() would take shutil's Windows branch and
+    # reach _winapi, which does not exist on the host running these tests.
+    mocker.patch("fx_audit_mcp.build_firefox.which", return_value="python3")
+    mocker.patch("fx_audit_mcp.build_firefox._get_build_dir", return_value="/objdir")
     mock_process = mocker.AsyncMock()
     mock_process.returncode = 0
     mock_process.stdout = _FakeStream([])
@@ -538,10 +540,10 @@ async def test_calls_windows_build_env_on_win32(
 
 
 @pytest.mark.anyio
-async def test_mach_build_exception_returns_failure(
+async def test_mach_build_exception_propagates(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    """Exception from mach build is caught and returned as failure."""
+    """Verify that a spawn failure reaches the caller instead of a false result."""
     firefox_dir = tmp_path / "firefox"
     mozconfig = tmp_path / "mozconfig"
 
@@ -551,19 +553,15 @@ async def test_mach_build_exception_returns_failure(
         side_effect=OSError("Permission denied"),
     )
 
-    result = await build_firefox(firefox_dir, mozconfig)
-
-    assert result.success is False
-    assert "Error building Firefox" in result.message
-    assert "OSError" in result.message
-    assert "Permission denied" in result.message
+    with pytest.raises(OSError, match="Permission denied"):
+        await build_firefox(firefox_dir, mozconfig)
 
 
 @pytest.mark.anyio
-async def test_mach_environment_failure_returns_failure(
+async def test_mach_environment_failure_propagates(
     mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    """Failure from mach environment is surfaced as a build failure."""
+    """Verify that an objdir lookup failure reaches the caller."""
     firefox_dir = tmp_path / "firefox"
     mozconfig = tmp_path / "mozconfig"
 
@@ -573,7 +571,5 @@ async def test_mach_environment_failure_returns_failure(
         side_effect=RuntimeError("mach environment output missing topobjdir"),
     )
 
-    result = await build_firefox(firefox_dir, mozconfig)
-
-    assert result.success is False
-    assert "Error building Firefox" in result.message
+    with pytest.raises(RuntimeError, match="missing topobjdir"):
+        await build_firefox(firefox_dir, mozconfig)
