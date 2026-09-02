@@ -42,9 +42,6 @@ class BrowserCrashInfo(ToolModel):
     crashed: bool
     """True if Firefox crashed while running the testcase."""
 
-    message: str
-    """Summary of the Firefox run outcome."""
-
     logs: CrashLogPaths
     """Paths to the run's stderr/stdout/crashdata log files. The ASAN report is
     in crashdata (log_ffp_asan_<pid>.txt), not stderr."""
