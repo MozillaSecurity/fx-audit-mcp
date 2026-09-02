@@ -19,7 +19,7 @@ from grizzly.target.firefox_target import FirefoxTarget
 from prefpicker import PrefPicker
 from sapphire import Sapphire
 
-from .models import BrowserCrashInfo, LogPaths
+from .models import BrowserCrashInfo, CrashLogPaths
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -133,7 +133,7 @@ def _extract_child_ptypes(log_paths: list[str]) -> dict[int, str]:
 
 
 def _crashed_process_fields(
-    log_paths: LogPaths, parent_pid: int | None
+    log_paths: CrashLogPaths, parent_pid: int | None
 ) -> dict[str, bool | None]:
     """Determine which process a crash occurred in.
 
@@ -316,15 +316,15 @@ def _build_testcase(file_paths: dict[str, Path], entry_point: str) -> TestCase:
     return testcase
 
 
-def _categorize_logs(log_dir: Path) -> LogPaths:
+def _categorize_logs(log_dir: Path) -> CrashLogPaths:
     """Categorize the log_*.txt files in *log_dir* into stderr/stdout/crashdata.
 
     Args:
         log_dir: Directory containing log_*.txt files emitted by grizzly.
 
     Returns:
-        LogPaths holding the absolute path of every matched file, sorted within
-        each category. Categories with no matching file are empty.
+        CrashLogPaths holding the absolute path of every matched file, sorted
+        within each category. Categories with no matching file are empty.
     """
     paths: dict[str, list[str]] = {"stderr": [], "stdout": [], "crashdata": []}
 
@@ -337,7 +337,7 @@ def _categorize_logs(log_dir: Path) -> LogPaths:
         else:
             paths["crashdata"].append(str(path))
 
-    return LogPaths(**paths)
+    return CrashLogPaths(**paths)
 
 
 async def package_testcase(
