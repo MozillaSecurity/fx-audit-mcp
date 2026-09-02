@@ -23,6 +23,7 @@ from fx_audit_mcp.browser_evaluator import (
     _crashed_process_fields,
     _extract_child_ptypes,
     _extract_crash_pids,
+    _FxAuditFirefoxTarget,
     _load_ignored_signatures,
     _load_pref_blocklist,
     browser_evaluator,
@@ -127,6 +128,26 @@ def test_target_supports_report_size_limit() -> None:
     """
     params = inspect.signature(FirefoxTarget.__init__).parameters
     assert "report_size_limit" in params
+
+
+@pytest.mark.parametrize("was_idle", [True, False])
+def test_hang_flag_records_only_a_busy_hang(
+    mocker: MockerFixture, was_idle: bool
+) -> None:
+    """The hang flag follows the browser's CPU state, not the time limit."""
+    target = _FxAuditFirefoxTarget.__new__(_FxAuditFirefoxTarget)
+    target.hang_detected = False
+    handle_hang = mocker.patch.object(
+        FirefoxTarget, "handle_hang", return_value=was_idle
+    )
+
+    assert target.handle_hang(ignore_timeout=True) is was_idle
+
+    assert target.hang_detected is not was_idle
+    assert handle_hang.call_args.kwargs == {
+        "ignore_idle": True,
+        "ignore_timeout": True,
+    }
 
 
 class TestCheckPrefBlocklist:
