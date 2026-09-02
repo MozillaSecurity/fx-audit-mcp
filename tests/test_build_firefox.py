@@ -446,6 +446,7 @@ class TestMain:
         "error",
         [
             FileNotFoundError("MOZCONFIG file not found at /nope"),
+            NotADirectoryError("Not a directory: '/nope/firefox'"),
             RuntimeError("mach environment output missing topobjdir"),
             json.JSONDecodeError("Expecting value", "", 0),
         ],
@@ -475,6 +476,29 @@ class TestMain:
             main()
         assert exc_info.value.code == 1
         assert str(error) in capsys.readouterr().err
+
+    def test_interrupt_exits_without_a_traceback(
+        self, mocker: MockerFixture, tmp_path: Path
+    ) -> None:
+        """Ctrl-C during a build exits 130 rather than raising."""
+        mc = tmp_path / "mc"
+        mc.touch()
+        mocker.patch(
+            "sys.argv",
+            [
+                "fx-audit-build-firefox",
+                "--firefox-dir",
+                str(tmp_path),
+                "--mozconfig",
+                str(mc),
+            ],
+        )
+        mocker.patch(
+            "fx_audit_mcp.build_firefox.build_firefox", side_effect=KeyboardInterrupt
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 130
 
     def test_unexpected_error_keeps_its_traceback(
         self, mocker: MockerFixture, tmp_path: Path
