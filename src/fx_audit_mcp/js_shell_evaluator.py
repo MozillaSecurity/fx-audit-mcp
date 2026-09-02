@@ -14,6 +14,9 @@ from .process_runner import run
 NTSTATUS_ERROR_BASE = 0xC0000000
 
 SANITIZER_MARKERS = ("AddressSanitizer", "UndefinedBehaviorSanitizer")
+# The closing line of a sanitizer report. A kill can cut a report off mid-stack,
+# so this is what proves the process finished writing one before it was killed.
+TERMINAL_SANITIZER_MARKERS = tuple(f"SUMMARY: {m}" for m in SANITIZER_MARKERS)
 
 
 async def js_shell_evaluator(
@@ -24,9 +27,11 @@ async def js_shell_evaluator(
 ) -> JSShellCrashInfo:
     """Run a JS testcase in the SpiderMonkey shell and report whether it crashed.
 
-    The shell always runs with ``--fuzzing-safe``. A JS error is not a crash.
-    Logs are written to a temporary directory. The caller is responsible for
-    cleanup.
+    The shell always runs with ``--fuzzing-safe``. A JS error is not a crash,
+    and neither is being killed at the time limit, but a testcase that trips a
+    sanitizer and then hangs is: a timed-out run is still a crash when the log
+    holds a report the shell finished writing. Logs are written to a temporary
+    directory. The caller is responsible for cleanup.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
@@ -58,13 +63,17 @@ async def js_shell_evaluator(
             timeout=timeout,
         )
 
-    # Detect crash: died on a fault the OS reported, or ASAN/UBSAN in
-    # stderr. A timed-out run is never a crash: its negative exit code is
-    # the kill signal, not a fault.
-    died_on_fault = result.exit_code < 0 or result.exit_code >= NTSTATUS_ERROR_BASE
-    crashed = not result.timed_out and (
-        died_on_fault or log_contains(result.stderr, *SANITIZER_MARKERS)
-    )
+    # Detect crash: died on a fault the OS reported, or ASAN/UBSAN in stderr.
+    # A timed-out run is judged on the report alone: its negative exit code is
+    # the kill signal rather than a fault, and its output can stop mid-report,
+    # but a report it finished writing is a crash whatever happened after.
+    # UBSAN does not halt on error by default, so a testcase can trip it and
+    # then go on to hang.
+    if result.timed_out:
+        crashed = log_contains(result.stderr, *TERMINAL_SANITIZER_MARKERS)
+    else:
+        died_on_fault = result.exit_code < 0 or result.exit_code >= NTSTATUS_ERROR_BASE
+        crashed = died_on_fault or log_contains(result.stderr, *SANITIZER_MARKERS)
     # A crash puts its diagnostics on stderr, sanitizer report or bare
     # assertion message, so crashdata names that file. A process killed
     # before it printed anything (SIGKILL from the OOM killer, a segfault

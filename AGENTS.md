@@ -73,8 +73,15 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   is the exception and has no `exit_code`: grizzly owns the process, so there is
   no exit status to report.
 - A run that hits its time limit is a result, not an error: the evaluators
-  return `timed_out: true` with the logs, and a timed-out run is never reported
-  as a crash.
+  return `timed_out: true` with the logs. `timed_out` and `crashed` are
+  independent: the JS shell and NSS gtest evaluators still report a crash on a
+  timed-out run when the log holds a sanitizer report the process finished
+  writing (UBSAN in particular does not halt on error, so a testcase can trip
+  it and then hang). They judge a timeout on the report's closing
+  `SUMMARY:` line rather than any mention of the sanitizer, since a kill can
+  cut a report off mid-stack. The exit code is ignored on a timeout: it is the
+  kill signal, not a fault. `browser_evaluator` never reports both, since a
+  timed-out browser is aborted and its report is a hang.
 - Long-running tools should stream subprocess output through `ctx` when a
   request context is available and capture the output for their return model;
   without a context, they should write output directly to stdout/stderr.
