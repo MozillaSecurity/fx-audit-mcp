@@ -45,7 +45,8 @@ class CrashLogPaths(LogPaths):
 
     crashdata: list[str]
     """Absolute paths to the run's crash diagnostics: an ASAN/UBSAN report, or
-    a bare assertion or abort message when the process died without one."""
+    a bare assertion or abort message when the process died without one. A path
+    also listed under stderr or stdout is that same file, not a copy."""
 
 
 class BrowserCrashInfo(ToolModel):
@@ -93,14 +94,15 @@ class JSShellCrashInfo(ToolModel):
     crashed: bool
     """True if the JS shell crashed while running the testcase."""
 
-    message: str
-    """Summary of the JS shell run outcome."""
+    timed_out: bool
+    """True if the testcase timed out."""
 
-    files: dict[str, str] | None = None
-    """Testcase files captured on crash (relative filename -> file content)."""
+    exit_code: int
+    """The shell's exit status. Negative means killed by that signal."""
 
-    logs: Logs | None = None
-    """stderr/stdout/crashdata captured from the JS shell."""
+    logs: CrashLogPaths
+    """Paths to the run's stdout/stderr/crashdata log files. Crash diagnostics
+    arrive on stderr. On a crash, crashdata mirrors stderr."""
 
 
 class NSSGtestCrashInfo(ToolModel):

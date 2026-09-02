@@ -1,160 +1,190 @@
 """Tests for js_shell_evaluator tool."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_mock import MockerFixture
 
-from fx_audit_mcp.js_shell_evaluator import MAX_LOG_SIZE, js_shell_evaluator
+from fx_audit_mcp.js_shell_evaluator import js_shell_evaluator
+
+from .conftest import MakeRunResult
+
+RUN = "fx_audit_mcp.js_shell_evaluator.run"
 
 
-def _mock_proc(
+@pytest.mark.parametrize(
+    ("exit_code", "expected"),
+    [
+        (0, False),
+        (3, False),  # JS error, not a crash
+        (-11, True),  # SIGSEGV
+        (-999, True),  # unknown signal number
+    ],
+)
+@pytest.mark.anyio
+async def test_exit_code_crash_classification(
     mocker: MockerFixture,
-    *,
-    returncode: int,
-    stdout: bytes = b"",
-    stderr: bytes = b"",
-    communicate: AsyncMock | None = None,
-) -> MagicMock:
-    proc: MagicMock = mocker.AsyncMock()
-    proc.returncode = returncode
-    proc.communicate = communicate or AsyncMock(return_value=(stdout, stderr))
-    mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
-    return proc
-
-
-@pytest.mark.anyio
-async def test_clean_exit_reports_no_crash(
-    mocker: MockerFixture, js_binary: Path
+    make_run_result: MakeRunResult,
+    js_binary: Path,
+    exit_code: int,
+    expected: bool,
 ) -> None:
-    _mock_proc(mocker, returncode=0, stdout=b"42\n")
-    result = await js_shell_evaluator("print(42)", js_binary)
-    assert result.crashed is False
-    assert result.message == "No crash detected"
+    """A crash is an exit status the OS flagged: a death by signal."""
+    mocker.patch(RUN, AsyncMock(return_value=make_run_result(exit_code=exit_code)))
 
-
-@pytest.mark.anyio
-async def test_negative_exit_code_signals_crash(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
-    _mock_proc(mocker, returncode=-11, stderr=b"")
-    result = await js_shell_evaluator("crash()", js_binary)
-    assert result.crashed is True
-    assert "SIGSEGV" in result.message
-
-
-@pytest.mark.anyio
-async def test_unknown_signal_falls_back_to_number(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
-    _mock_proc(mocker, returncode=-999, stderr=b"")
     result = await js_shell_evaluator("x", js_binary)
-    assert result.crashed is True
-    assert "999" in result.message
+
+    assert result.crashed is expected
+    assert result.exit_code == exit_code
 
 
+@pytest.mark.parametrize("marker", ["AddressSanitizer", "UndefinedBehaviorSanitizer"])
 @pytest.mark.anyio
-async def test_address_sanitizer_in_stderr_with_zero_exit(
-    mocker: MockerFixture, js_binary: Path
+async def test_sanitizer_in_stderr_with_zero_exit_signals_crash(
+    mocker: MockerFixture,
+    make_run_result: MakeRunResult,
+    js_binary: Path,
+    marker: str,
 ) -> None:
-    _mock_proc(
-        mocker,
-        returncode=0,
-        stderr=b"==1234==ERROR: AddressSanitizer: heap-buffer-overflow\n",
+    mocker.patch(
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(
+                stderr=f"==1==ERROR: {marker}: boom\n".encode()
+            )
+        ),
     )
+
     result = await js_shell_evaluator("oob()", js_binary)
+
     assert result.crashed is True
 
 
 @pytest.mark.anyio
-async def test_ubsan_in_stderr(mocker: MockerFixture, js_binary: Path) -> None:
-    _mock_proc(
-        mocker,
-        returncode=0,
-        stderr=b"UndefinedBehaviorSanitizer: signed-integer-overflow\n",
+async def test_js_error_returns_its_output(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """Verify that a rejected testcase returns its output rather than raising."""
+    mocker.patch(
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(
+                exit_code=3, stderr=b"SyntaxError: unexpected token\n"
+            )
+        ),
     )
-    result = await js_shell_evaluator("x", js_binary)
-    assert result.crashed is True
 
-
-@pytest.mark.anyio
-async def test_positive_nonzero_exit_is_js_error_not_crash(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
-    _mock_proc(mocker, returncode=3, stderr=b"SyntaxError\n")
     result = await js_shell_evaluator("(", js_binary)
+
     assert result.crashed is False
-    assert "JS error" in result.message
+    assert result.logs.crashdata == []
+    assert (
+        Path(result.logs.stderr[0]).read_bytes() == b"SyntaxError: unexpected token\n"
+    )
 
 
 @pytest.mark.anyio
-async def test_timeout_kills_and_returns_no_crash(
-    mocker: MockerFixture, js_binary: Path
+async def test_timed_out_run_is_never_a_crash(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
 ) -> None:
-    proc: MagicMock = mocker.AsyncMock()
-    proc.returncode = None
-    proc.communicate = AsyncMock(side_effect=[TimeoutError, (b"", b"")])
-    proc.kill = MagicMock()
-    mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
+    """The kill signal's exit code and any partial output must not read as a crash."""
+    mocker.patch(
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(
+                exit_code=-9, timed_out=True, stderr=b"partial AddressSanitizer\n"
+            )
+        ),
+    )
 
     result = await js_shell_evaluator("while(1){}", js_binary, timeout=1)
 
-    proc.kill.assert_called_once()
+    assert result.timed_out is True
     assert result.crashed is False
-    assert "Timed out after 1s" in result.message
+    assert result.logs.crashdata == []
 
 
 @pytest.mark.anyio
-async def test_stdout_stderr_are_tail_truncated(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
-    long = b"abcdefghij" * (MAX_LOG_SIZE // 10 + 100)
-    crash_marker = b"AddressSanitizer\n"
-    _mock_proc(mocker, returncode=-11, stdout=long, stderr=long + crash_marker)
-
-    result = await js_shell_evaluator("x", js_binary)
-
-    assert result.logs is not None
-    assert len(result.logs.stdout) == MAX_LOG_SIZE
-    assert len(result.logs.stderr) == MAX_LOG_SIZE
-    # tail-truncated: the end of the original input must remain
-    assert result.logs.stderr.endswith("AddressSanitizer\n")
-
-
-@pytest.mark.anyio
-async def test_missing_js_binary_returns_failure(tmp_path: Path) -> None:
-    result = await js_shell_evaluator("x", tmp_path / "missing")
-    assert result.crashed is False
-    assert "not found" in result.message
-
-
-@pytest.mark.anyio
-async def test_extra_flags_are_passed_through(
-    mocker: MockerFixture, js_binary: Path
-) -> None:
-    spawn = mocker.patch(
-        "asyncio.create_subprocess_exec",
-        return_value=mocker.AsyncMock(
-            returncode=0,
-            communicate=AsyncMock(return_value=(b"", b"")),
-        ),
-    )
-    await js_shell_evaluator("x", js_binary, flags=["--no-jit", "--baseline-eager"])
-    args = spawn.call_args.args
-    assert "--fuzzing-safe" in args
-    assert "--no-jit" in args
-    assert "--baseline-eager" in args
-
-
-@pytest.mark.anyio
-async def test_subprocess_exception_returns_failure(
-    mocker: MockerFixture, js_binary: Path
+async def test_crashdata_points_at_the_stderr_log(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
 ) -> None:
     mocker.patch(
-        "asyncio.create_subprocess_exec",
-        side_effect=RuntimeError("spawn failed"),
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(
+                exit_code=-11,
+                stderr=b"==1==ERROR: AddressSanitizer: heap-buffer-overflow\n",
+            )
+        ),
     )
-    result = await js_shell_evaluator("x", js_binary)
-    assert result.crashed is False
-    assert "RuntimeError" in result.message
+
+    result = await js_shell_evaluator("oob()", js_binary)
+
+    assert result.logs.crashdata == result.logs.stderr
+    report = Path(result.logs.crashdata[0]).read_text(encoding="utf-8")
+    assert "AddressSanitizer" in report
+
+
+@pytest.mark.anyio
+async def test_assertion_abort_still_reports_crashdata(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """Verify that a MOZ_ASSERT abort exposes its message, with no sanitizer marker."""
+    assertion = (
+        b"Assertion failure: obj->is<JSFunction>(), at js/src/vm/JSObject.cpp:1\n"
+    )
+    mocker.patch(
+        RUN, AsyncMock(return_value=make_run_result(exit_code=-6, stderr=assertion))
+    )
+
+    result = await js_shell_evaluator("boom()", js_binary)
+
+    assert result.crashed is True
+    assert result.logs.crashdata == result.logs.stderr
+    assert Path(result.logs.crashdata[0]).read_bytes() == assertion
+
+
+@pytest.mark.anyio
+async def test_testcase_is_run_under_a_stable_name(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """Verify the shell is handed a predictable filename, not a random temp name."""
+    seen: dict[str, str] = {}
+
+    async def capture(*args: str, **_kwargs: object) -> object:
+        # The temp directory is removed once the tool returns, so read it here.
+        path = Path(args[-1])
+        seen["name"] = path.name
+        seen["content"] = path.read_text(encoding="utf-8")
+        return make_run_result()
+
+    mocker.patch(RUN, side_effect=capture)
+
+    await js_shell_evaluator("boom()", js_binary)
+
+    assert seen == {"name": "testcase.js", "content": "boom()"}
+
+
+@pytest.mark.anyio
+async def test_flags_and_timeout_are_passed_through(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    run_mock = mocker.patch(RUN, AsyncMock(return_value=make_run_result()))
+
+    await js_shell_evaluator(
+        "x", js_binary, timeout=42, flags=["--no-jit", "--baseline-eager"]
+    )
+
+    args = run_mock.call_args.args
+    assert args[0] == str(js_binary)
+    assert args[1] == "--fuzzing-safe"
+    assert "--no-jit" in args
+    assert "--baseline-eager" in args
+    assert run_mock.call_args.kwargs["timeout"] == 42
+
+
+@pytest.mark.anyio
+async def test_missing_js_binary_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="not found"):
+        await js_shell_evaluator("x", tmp_path / "missing")
