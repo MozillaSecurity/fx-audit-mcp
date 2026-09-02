@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -181,6 +182,25 @@ async def test_missing_mozconfig(tmp_path: Path) -> None:
         await build_firefox(firefox_dir, mozconfig)
 
     assert str(mozconfig) in str(exc.value)
+
+
+@pytest.mark.parametrize("environ", [{"PATH": "/nowhere"}, {}])
+@pytest.mark.anyio
+async def test_missing_python3(
+    mocker: MockerFixture, tmp_path: Path, environ: dict[str, str]
+) -> None:
+    """An unusable PATH raises rather than tripping an assertion."""
+    firefox_dir = tmp_path / "firefox"
+    mozconfig = tmp_path / "mozconfig"
+    firefox_dir.mkdir()
+    mozconfig.touch()
+    mocker.patch.dict(os.environ, environ, clear=True)
+    which = mocker.patch("fx_audit_mcp.build_firefox.which", return_value=None)
+
+    with pytest.raises(FileNotFoundError, match="python3"):
+        await build_firefox(firefox_dir, mozconfig)
+
+    assert which.call_args.kwargs["path"] == environ.get("PATH", os.defpath)
 
 
 @pytest.mark.anyio

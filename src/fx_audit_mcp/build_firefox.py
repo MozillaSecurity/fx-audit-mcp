@@ -158,8 +158,9 @@ async def build_firefox(
     if sys.platform == "win32":
         _windows_build_env(env)
 
-    py3 = which("python3", path=env["PATH"])
-    assert py3, "Couldn't find python3 executable in PATH"
+    py3 = which("python3", path=env.get("PATH", os.defpath))
+    if not py3:
+        raise FileNotFoundError("Couldn't find python3 executable in PATH")
 
     build_dir = await _get_build_dir(py3, firefox_dir, env)
 
