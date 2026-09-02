@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from grizzly.common import storage as grizzly_storage
@@ -446,6 +447,92 @@ class TestBrowserEvaluator:
                 entry_point="test.html",
                 firefox_binary=firefox_binary,
             )
+
+    @staticmethod
+    def _mock_replay(
+        mocker: MockerFixture,
+        tmp_path: Path,
+        *,
+        is_hang: bool,
+        report_files: dict[str, str],
+    ) -> MagicMock:
+        """Stub grizzly so replay yields one result with the given report files."""
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        target.parent_pid = 1234
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        for name, content in report_files.items():
+            (report_dir / name).write_text(content)
+        result = mocker.MagicMock()
+        result.report.path = report_dir
+        result.report.is_hang = is_hang
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.return_value = [result]
+        return target
+
+    @pytest.mark.anyio
+    async def test_hang_result_reports_timed_out_not_crashed(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """A run grizzly flags as a hang is a timeout result, never a crash."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        self._mock_replay(
+            mocker,
+            tmp_path,
+            is_hang=True,
+            report_files={"log_stderr.txt": "still busy\n"},
+        )
+
+        result = await browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            firefox_binary=firefox_binary,
+        )
+
+        assert result.timed_out is True
+        assert result.crashed is False
+        assert result.crashed_parent is None
+        assert Path(result.logs.stderr[0]).read_text(encoding="utf-8") == "still busy\n"
+
+    @pytest.mark.anyio
+    async def test_crash_result_reports_attributed_crash(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """A non-hang replay result is a crash, attributed via its report logs."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        self._mock_replay(
+            mocker,
+            tmp_path,
+            is_hang=False,
+            report_files={
+                "log_stderr.txt": "gecko noise\n",
+                # The PID matches the mocked target.parent_pid.
+                "log_ffp_asan_1234.txt": (
+                    "==1234==ERROR: AddressSanitizer: heap-use-after-free\n"
+                ),
+            },
+        )
+
+        result = await browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            firefox_binary=firefox_binary,
+        )
+
+        assert result.crashed is True
+        assert result.timed_out is False
+        assert result.crashed_parent is True
+        assert result.logs.crashdata
+        assert "asan" in Path(result.logs.crashdata[0]).name
 
 
 class TestExtractChildPtypes:

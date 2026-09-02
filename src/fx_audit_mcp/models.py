@@ -42,6 +42,10 @@ class BrowserCrashInfo(ToolModel):
     crashed: bool
     """True if Firefox crashed while running the testcase."""
 
+    timed_out: bool
+    """True if the testcase timed out: a browser process was still busy when
+    the time limit expired."""
+
     logs: CrashLogPaths
     """Paths to the run's stderr/stdout/crashdata log files. The ASAN report is
     in crashdata (log_ffp_asan_<pid>.txt), not stderr."""
