@@ -26,8 +26,17 @@ if TYPE_CHECKING:
 
     from grizzly.common.report import Report
 
+
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
 PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
+
+# Idle detection lets a finished run stop serving before the deadline, so only a
+# browser still burning CPU reaches the hang path. Both values match grizzly's
+# own: the threshold is what FirefoxTarget.handle_hang tests against, and the
+# delay is grizzly reduce's IDLE_DELAY_MIN.
+_IDLE_THRESHOLD = 15
+_IDLE_DELAY = 10
+
 _USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
 _ASAN_PID_RE = re.compile(r"==(\d+)==ERROR:")
 _CHILD_LAUNCH_RE = re.compile(
@@ -435,13 +444,24 @@ async def browser_evaluator(  # pragma: no cover
             first; must be present in ``file_paths``, and its extension
             controls how Firefox dispatches the file.
         firefox_binary: Absolute path to the Firefox binary.
-        timeout: Per-run timeout in seconds before closing the browser.
+        timeout: Run window in seconds; the browser is closed when it expires.
+            Raise it for testcases that need more time to reach the
+            vulnerable code.
         prefs: Optional custom Firefox prefs to layer on top of the prefpicker
             template.
         enable_sandbox: Leave the Firefox sandbox enabled. Off by default, which
             disables sandboxing so the browser behaves like other fuzzing and
             replay runs. Enabling the sandbox can interfere with crash log
             creation, so crashes may be missed.
+
+    Returns:
+        BrowserCrashInfo with:
+        - crashed: Boolean indicating if the testcase triggered a crash.
+        - timed_out: Boolean indicating if the testcase timed out.
+        - crashed_parent, crashed_content, crashed_gpu, crashed_rdd,
+          crashed_gmp, crashed_socket, crashed_utility: which process type the
+          crash was attributed to; None when attribution was unavailable.
+        - logs: Paths to the run's stderr/stdout/crashdata log files.
     """
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
@@ -494,10 +514,10 @@ async def browser_evaluator(  # pragma: no cover
 
     results = []
     try:
-        with Sapphire(auto_close=1) as server:
+        with Sapphire(auto_close=1, timeout=timeout) as server:
             target.reverse(server.port, server.port)
             with ReplayManager(
-                ignore=frozenset(["timeout"]),
+                ignore=frozenset(),
                 server=server,
                 target=target,
                 ignore_signatures=_load_ignored_signatures(),
@@ -508,6 +528,8 @@ async def browser_evaluator(  # pragma: no cover
                         testcases=[testcase],
                         time_limit=timeout,
                         expect_hang=False,
+                        idle_threshold=_IDLE_THRESHOLD,
+                        idle_delay=_IDLE_DELAY,
                     )
                 except TargetLaunchTimeout:
                     if target.launch_timeout_report is not None:
@@ -527,6 +549,7 @@ async def browser_evaluator(  # pragma: no cover
                         ):
                             return BrowserCrashInfo(
                                 crashed=True,
+                                timed_out=False,
                                 **_crashed_process_fields(log_paths, target.parent_pid),
                                 logs=log_paths,
                             )
@@ -538,6 +561,7 @@ async def browser_evaluator(  # pragma: no cover
             target.save_logs(log_dir)
             return BrowserCrashInfo(
                 crashed=False,
+                timed_out=False,
                 logs=_categorize_logs(log_dir),
             )
 
@@ -545,8 +569,15 @@ async def browser_evaluator(  # pragma: no cover
         # Copy before the finally block rmtree()s the report dir.
         copytree(result_obj.report.path, log_dir, dirs_exist_ok=True)
         log_paths = _categorize_logs(log_dir)
+        if result_obj.report.is_hang:
+            return BrowserCrashInfo(
+                crashed=False,
+                timed_out=True,
+                logs=log_paths,
+            )
         return BrowserCrashInfo(
             crashed=True,
+            timed_out=False,
             **_crashed_process_fields(log_paths, target.parent_pid),
             logs=log_paths,
         )
