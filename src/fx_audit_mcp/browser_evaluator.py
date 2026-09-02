@@ -31,12 +31,11 @@ if TYPE_CHECKING:
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
 PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
 
-# Idle detection lets a finished run stop serving before the deadline, so only a
-# browser still burning CPU reaches the hang path. Both values match grizzly's
-# own: the threshold is what FirefoxTarget.handle_hang tests against, and the
-# delay is grizzly reduce's IDLE_DELAY_MIN.
+# Idle detection is what separates a finished run from a hang once the time
+# limit expires: a browser under this CPU threshold stopped requesting files
+# because it was done, anything above it is still working. The value is
+# grizzly's own, what FirefoxTarget.handle_hang tests against.
 _IDLE_THRESHOLD = 15
-_IDLE_DELAY = 10
 
 _USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
 _ASAN_PID_RE = re.compile(r"==(\d+)==ERROR:")
@@ -541,7 +540,13 @@ async def browser_evaluator(  # pragma: no cover
                         time_limit=timeout,
                         expect_hang=False,
                         idle_threshold=_IDLE_THRESHOLD,
-                        idle_delay=_IDLE_DELAY,
+                        # Hold the first idle poll until the time limit is up.
+                        # Sapphire tests the idle callback before the deadline,
+                        # so polling any sooner ends the run at that poll
+                        # instead: a testcase that waits before triggering its
+                        # bug (a timer, a slow load) would be closed as a clean
+                        # run having never reached it, whatever the timeout.
+                        idle_delay=timeout,
                     )
                 except TargetLaunchTimeout:
                     if target.launch_timeout_report is None:
