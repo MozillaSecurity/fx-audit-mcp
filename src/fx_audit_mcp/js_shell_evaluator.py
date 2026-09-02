@@ -1,14 +1,13 @@
 """Evaluate testcase tool for testing vulnerabilities in the SpiderMonkey JS shell."""
 
-import asyncio
-import os
-import signal
 import tempfile
 from pathlib import Path
 
-from .models import JSShellCrashInfo, Logs
+from .logs import log_contains
+from .models import JSShellCrashInfo
+from .process_runner import run
 
-MAX_LOG_SIZE = 1_048_576  # bytes; logs are tail-truncated to this limit
+SANITIZER_MARKERS = ("AddressSanitizer", "UndefinedBehaviorSanitizer")
 
 
 async def js_shell_evaluator(
@@ -24,9 +23,8 @@ async def js_shell_evaluator(
     Always runs the shell with ``--fuzzing-safe``. A crash is reported when
     the shell exits via signal (negative exit code) or when
     ``AddressSanitizer`` / ``UndefinedBehaviorSanitizer`` appears in stderr;
-    JS errors (positive non-zero exit) are not treated as crashes. Timed-out
-    processes are killed and return no crash. Captured stdout/stderr are
-    tail-truncated to MAX_LOG_SIZE.
+    JS errors (positive non-zero exit) are not treated as crashes. Logs are
+    written to a temporary directory. The caller is responsible for cleanup.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
@@ -38,99 +36,43 @@ async def js_shell_evaluator(
             ``["--no-jit", "--baseline-eager"]``).
 
     Returns:
-        JSShellCrashInfo.
+        JSShellCrashInfo with:
+        - crashed: Boolean indicating if the testcase triggered a crash.
+        - timed_out: Boolean indicating if the testcase timed out.
+        - exit_code: The shell's exit status.
+        - logs: Paths to the run's stdout/stderr/crashdata log files.
     """
     if not js_binary.exists():
-        return JSShellCrashInfo(
-            crashed=False,
-            message=f"JS shell binary not found at {js_binary}",
+        raise FileNotFoundError(f"JS shell binary not found at {js_binary}")
+
+    with tempfile.TemporaryDirectory(prefix="fx_audit_js_") as tmp_dir:
+        testcase_path = Path(tmp_dir) / "testcase.js"
+        testcase_path.write_text(content, encoding="utf-8")
+
+        result = await run(
+            str(js_binary),
+            "--fuzzing-safe",
+            *(flags or []),
+            str(testcase_path),
+            timeout=timeout,
         )
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="fx_audit_js_") as tmp_dir:
-            fd, tmp_path = tempfile.mkstemp(suffix=".js", dir=tmp_dir)
-            testcase_path = Path(tmp_path)
-            os.close(fd)
-            testcase_path.write_text(content, encoding="utf-8")
+    # Detect crash: killed by a signal, or ASAN/UBSAN in stderr. A timed-out
+    # run is never a crash: its negative exit code is the kill signal, not a
+    # fault.
+    died_on_fault = result.exit_code < 0
+    crashed = not result.timed_out and (
+        died_on_fault or log_contains(result.stderr, *SANITIZER_MARKERS)
+    )
+    # A crash puts its diagnostics on stderr, sanitizer report or bare
+    # assertion message, so crashdata names that file.
+    crashdata: list[Path] = []
+    if crashed:
+        crashdata = [result.stderr]
 
-            proc = await asyncio.create_subprocess_exec(
-                str(js_binary),
-                "--fuzzing-safe",
-                *(flags or []),
-                str(testcase_path),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env={**os.environ},
-            )
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
-                )
-            except TimeoutError:
-                proc.kill()
-                await proc.communicate()
-                return JSShellCrashInfo(
-                    crashed=False,
-                    message=f"Timed out after {timeout}s — no crash detected",
-                    logs=Logs(stderr="", stdout=""),
-                )
-
-            stdout_raw = stdout_bytes.decode("utf-8", errors="replace")
-            stderr_raw = stderr_bytes.decode("utf-8", errors="replace")
-            stdout = (
-                stdout_raw[-MAX_LOG_SIZE:]
-                if len(stdout_raw) > MAX_LOG_SIZE
-                else stdout_raw
-            )
-            stderr = (
-                stderr_raw[-MAX_LOG_SIZE:]
-                if len(stderr_raw) > MAX_LOG_SIZE
-                else stderr_raw
-            )
-            exit_code = proc.returncode
-
-            # Detect crash: killed by signal or ASAN/UBSAN in stderr
-            killed_by_signal = exit_code is not None and exit_code < 0
-            has_sanitizer = (
-                "AddressSanitizer" in stderr or "UndefinedBehaviorSanitizer" in stderr
-            )
-
-            crashed = killed_by_signal or has_sanitizer
-
-            if not crashed:
-                msg = (
-                    f"JS shell exited with code {exit_code} (JS error, not a crash)"
-                    if exit_code != 0
-                    else "No crash detected"
-                )
-                return JSShellCrashInfo(
-                    crashed=False,
-                    message=msg,
-                    logs=Logs(stderr=stderr, stdout=stdout),
-                )
-
-            signal_name = ""
-            if killed_by_signal and exit_code is not None:
-                sig_num = -exit_code
-                try:
-                    sig = signal.Signals(sig_num)
-                    signal_name = f" (signal {sig.name})"
-                except ValueError:
-                    signal_name = f" (signal {sig_num})"
-
-            return JSShellCrashInfo(
-                crashed=True,
-                message=f"Crash detected{signal_name}",
-                files={testcase_path.name: content},
-                logs=Logs(
-                    stderr=stderr,
-                    stdout=stdout,
-                    crashdata=stderr,  # ASAN output goes to stderr
-                ),
-            )
-    except Exception as e:
-        return JSShellCrashInfo(
-            crashed=False,
-            message=f"Error running JS shell: {type(e).__name__}: {e!s}",
-        )
+    return JSShellCrashInfo(
+        crashed=crashed,
+        timed_out=result.timed_out,
+        exit_code=result.exit_code,
+        logs=result.crash_logs(crashdata),
+    )
