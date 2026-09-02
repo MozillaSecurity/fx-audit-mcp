@@ -7,6 +7,12 @@ from .logs import log_contains
 from .models import JSShellCrashInfo
 from .process_runner import run
 
+# Windows has no signals to report: an unhandled exception becomes the
+# process's exit code as an NTSTATUS value, and 0xC0000000 opens the range
+# reserved for errors (0xC0000005 is an access violation). A POSIX exit status
+# never reaches this far, so the check needs no platform guard.
+NTSTATUS_ERROR_BASE = 0xC0000000
+
 SANITIZER_MARKERS = ("AddressSanitizer", "UndefinedBehaviorSanitizer")
 
 
@@ -57,10 +63,10 @@ async def js_shell_evaluator(
             timeout=timeout,
         )
 
-    # Detect crash: killed by a signal, or ASAN/UBSAN in stderr. A timed-out
-    # run is never a crash: its negative exit code is the kill signal, not a
-    # fault.
-    died_on_fault = result.exit_code < 0
+    # Detect crash: died on a fault the OS reported, or ASAN/UBSAN in
+    # stderr. A timed-out run is never a crash: its negative exit code is
+    # the kill signal, not a fault.
+    died_on_fault = result.exit_code < 0 or result.exit_code >= NTSTATUS_ERROR_BASE
     crashed = not result.timed_out and (
         died_on_fault or log_contains(result.stderr, *SANITIZER_MARKERS)
     )

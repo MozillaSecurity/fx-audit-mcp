@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_mock import MockerFixture
 
-from fx_audit_mcp.js_shell_evaluator import js_shell_evaluator
+from fx_audit_mcp.js_shell_evaluator import NTSTATUS_ERROR_BASE, js_shell_evaluator
 
 from .conftest import MakeRunResult
 
@@ -20,6 +20,9 @@ RUN = "fx_audit_mcp.js_shell_evaluator.run"
         (3, False),  # JS error, not a crash
         (-11, True),  # SIGSEGV
         (-999, True),  # unknown signal number
+        (0xC0000005, True),  # STATUS_ACCESS_VIOLATION
+        (0xC0000374, True),  # STATUS_HEAP_CORRUPTION
+        (NTSTATUS_ERROR_BASE - 1, False),  # below the error range
     ],
 )
 @pytest.mark.anyio
@@ -30,7 +33,7 @@ async def test_exit_code_crash_classification(
     exit_code: int,
     expected: bool,
 ) -> None:
-    """A crash is an exit status the OS flagged: a death by signal."""
+    """A crash is an exit status the OS flagged: a signal or an NTSTATUS error."""
     mocker.patch(RUN, AsyncMock(return_value=make_run_result(exit_code=exit_code)))
 
     result = await js_shell_evaluator("x", js_binary)
