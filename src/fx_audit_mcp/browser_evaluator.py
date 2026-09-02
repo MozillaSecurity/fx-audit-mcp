@@ -527,29 +527,34 @@ async def browser_evaluator(  # pragma: no cover
                         idle_delay=_IDLE_DELAY,
                     )
                 except TargetLaunchTimeout:
-                    if target.launch_timeout_report is not None:
-                        copytree(
-                            target.launch_timeout_report.path,
-                            log_dir,
-                            dirs_exist_ok=True,
+                    if target.launch_timeout_report is None:
+                        raise TimeoutError(
+                            "Firefox failed to launch within the timeout"
+                        ) from None
+                    copytree(
+                        target.launch_timeout_report.path,
+                        log_dir,
+                        dirs_exist_ok=True,
+                    )
+                    log_paths = _categorize_logs(log_dir)
+                    # A child process (content/GPU/etc.) can crash with ASAN
+                    # while the parent stays alive and the bootstrap times out.
+                    # Test file size rather than the crash PIDs: UBSAN reports
+                    # carry no ==pid==ERROR: marker, so a PID scan would miss
+                    # them here.
+                    if any(Path(path).stat().st_size for path in log_paths.crashdata):
+                        return BrowserCrashInfo(
+                            crashed=True,
+                            timed_out=False,
+                            **_crashed_process_fields(log_paths, target.parent_pid),
+                            logs=log_paths,
                         )
-                        log_paths = _categorize_logs(log_dir)
-                        # A child process (content/GPU/etc.) can crash with ASAN
-                        # while the parent stays alive and the bootstrap times out.
-                        # Test file size rather than the crash PIDs: UBSAN reports
-                        # carry no ==pid==ERROR: marker, so a PID scan would miss
-                        # them here.
-                        if any(
-                            Path(path).stat().st_size for path in log_paths.crashdata
-                        ):
-                            return BrowserCrashInfo(
-                                crashed=True,
-                                timed_out=False,
-                                **_crashed_process_fields(log_paths, target.parent_pid),
-                                logs=log_paths,
-                            )
+                    # The copied launch logs are the only diagnostics for this
+                    # failure; hand the caller their location, as with any
+                    # returned log dir, rather than stranding the directory.
                     raise TimeoutError(
-                        "Firefox failed to launch within the timeout"
+                        "Firefox failed to launch within the timeout; "
+                        f"launch logs are in {log_dir}"
                     ) from None
 
         if not results:
