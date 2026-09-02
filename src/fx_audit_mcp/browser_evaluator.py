@@ -187,29 +187,6 @@ def _crashed_process_fields(
     return pfields
 
 
-def _collect_dump_files(dump_dir: Path) -> dict[str, str]:
-    """Read all files under *dump_dir* into a relative-path → contents dict.
-
-    Paths in the returned mapping use forward slashes regardless of platform
-    so downstream consumers (LLM agents, packaged testcases) see portable
-    keys.
-
-    Args:
-        dump_dir: Directory containing files dumped by grizzly's testcase.dump().
-
-    Returns:
-        Mapping of file path (POSIX-style, relative to *dump_dir*) to file
-        contents, decoded as UTF-8 with replacement for invalid sequences.
-    """
-    files: dict[str, str] = {}
-    for file_path in dump_dir.rglob("*"):
-        if file_path.is_file():
-            relative_name = file_path.relative_to(dump_dir)
-            with file_path.open(encoding="utf-8", errors="replace") as f:
-                files[relative_name.as_posix()] = f.read()
-    return files
-
-
 def _load_ignored_signatures() -> list[CrashSignature]:
     """Load FuzzManager crash signatures from the ignored_signatures directory.
 
@@ -445,8 +422,7 @@ async def browser_evaluator(  # pragma: no cover
     directory and the returned ``logs`` holds their paths, categorized into
     stderr/stdout/crashdata, so they can be read, grepped and tailed with file
     tools. That directory is never deleted; the caller owns it and is
-    responsible for removing it. On crash, the dumped testcase files are
-    returned inline alongside those paths.
+    responsible for removing it.
 
     Args:
         file_paths: Testcase files, as a mapping of the name each file should
@@ -552,7 +528,6 @@ async def browser_evaluator(  # pragma: no cover
                             return BrowserCrashInfo(
                                 crashed=True,
                                 **_crashed_process_fields(log_paths, target.parent_pid),
-                                files={},
                                 logs=log_paths,
                             )
                     raise TimeoutError(
@@ -570,15 +545,11 @@ async def browser_evaluator(  # pragma: no cover
         # Copy before the finally block rmtree()s the report dir.
         copytree(result_obj.report.path, log_dir, dirs_exist_ok=True)
         log_paths = _categorize_logs(log_dir)
-        with tempfile.TemporaryDirectory(prefix="fx_audit_dump_") as dump_dir_str:
-            dump_dir = Path(dump_dir_str)
-            testcase.dump(dump_dir, include_details=True)
-            return BrowserCrashInfo(
-                crashed=True,
-                **_crashed_process_fields(log_paths, target.parent_pid),
-                files=_collect_dump_files(dump_dir),
-                logs=log_paths,
-            )
+        return BrowserCrashInfo(
+            crashed=True,
+            **_crashed_process_fields(log_paths, target.parent_pid),
+            logs=log_paths,
+        )
 
     finally:
         testcase.cleanup()

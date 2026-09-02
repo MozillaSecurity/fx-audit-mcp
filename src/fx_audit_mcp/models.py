@@ -67,10 +67,6 @@ class BrowserCrashInfo(ToolModel):
     crashed_utility: bool | None = None
     """True if the crash occurred in a utility process."""
 
-    files: dict[str, str] | None = None
-    """Testcase files that reproduce the crash
-    (relative filename -> file content)."""
-
 
 class JSShellCrashInfo(ToolModel):
     """Result of running a testcase under the SpiderMonkey JS shell."""
