@@ -67,6 +67,19 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
         # Set when launch() catches TargetLaunchTimeout; caller is responsible
         # for reading the report's path and calling its cleanup().
         self.launch_timeout_report: Report | None = None
+        # Grizzly calls handle_hang() only when a run hits its time limit, but
+        # produces a hang report solely for busy hangs on Linux (elsewhere, and
+        # for idle hangs, the browser is just closed), so this flag is then the
+        # only record that the run timed out rather than finishing cleanly.
+        self.hang_detected = False
+
+    def handle_hang(
+        self, ignore_idle: bool = True, ignore_timeout: bool = False
+    ) -> bool:  # pragma: no cover
+        self.hang_detected = True
+        return super().handle_hang(
+            ignore_idle=ignore_idle, ignore_timeout=ignore_timeout
+        )
 
     def launch(self, location: str) -> None:  # pragma: no cover
         """Override to capture parent PID right after Firefox launches."""
@@ -561,7 +574,9 @@ async def browser_evaluator(  # pragma: no cover
             target.save_logs(log_dir)
             return BrowserCrashInfo(
                 crashed=False,
-                timed_out=False,
+                # A hang that produced no report (idle hang, or any hang on
+                # non-Linux) still timed out; only the flag records it.
+                timed_out=target.hang_detected,
                 logs=_categorize_logs(log_dir),
             )
 
