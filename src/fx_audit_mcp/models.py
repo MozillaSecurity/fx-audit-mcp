@@ -13,19 +13,6 @@ class ToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
 
 
-class Logs(ToolModel):
-    """Captured process logs from a tool invocation."""
-
-    stderr: str
-    """Process stderr captured during the run."""
-
-    stdout: str
-    """Process stdout captured during the run."""
-
-    crashdata: str = ""
-    """ASAN/UBSAN sanitizer output."""
-
-
 class LogPaths(ToolModel):
     """Log files a tool invocation wrote to disk.
 
@@ -114,11 +101,16 @@ class NSSGtestCrashInfo(ToolModel):
     crashed: bool
     """True if AddressSanitizer detected a crash."""
 
-    message: str
-    """Summary of the gtest run outcome."""
+    timed_out: bool
+    """True if the testcase timed out."""
 
-    logs: Logs | None = None
-    """stderr/stdout captured from the gtest run."""
+    exit_code: int
+    """The harness's exit status. On POSIX, negative means killed by that
+    signal."""
+
+    logs: CrashLogPaths
+    """Paths to the run's stdout/stderr/crashdata log files. crashdata names
+    whichever of stdout/stderr carried the sanitizer report."""
 
 
 class BuildResult(ToolModel):
