@@ -1,6 +1,6 @@
 """Pydantic return models for fx-audit-mcp MCP tools."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 class ToolModel(BaseModel):
@@ -27,29 +27,25 @@ class Logs(ToolModel):
 
 
 class LogPaths(ToolModel):
-    """Paths to log files a tool invocation wrote to disk."""
+    """Log files a tool invocation wrote to disk.
 
-    stderr: list[str] = Field(default_factory=list)
-    """File paths, NOT log contents - read or grep these files to see the
-    output. Absolute paths to the run's complete, untruncated stderr logs
-    (Gecko/MOZ_LOG output, including the '++PROCESS [pid = N] ... [type = T]'
-    child-process launch records). Files can be very large, so prefer
-    grep/head/tail over reading a whole file. Consecutive duplicate lines may
-    be collapsed into a '[Previous line repeated N times]' marker. The
-    containing directory is not deleted by this tool."""
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
+    """
 
-    stdout: list[str] = Field(default_factory=list)
-    """File paths, NOT log contents - read or grep these files to see the
-    output. Absolute paths to the run's complete, untruncated stdout logs. The
-    containing directory is not deleted by this tool."""
+    stderr: list[str]
+    """Absolute paths to the run's stderr logs."""
 
-    crashdata: list[str] = Field(default_factory=list)
-    """File paths, NOT log contents - read or grep these files to see the
-    output. Absolute paths to the run's sanitizer and crash logs: the
-    ASAN/UBSAN report lives here, not in stderr. One log_ffp_asan_<pid>.txt
-    per process that produced sanitizer output, where the trailing number is
-    that process's PID, plus log_minidump_<n>.txt and log_ffp_worker_<name>.txt
-    when present. The containing directory is not deleted by this tool."""
+    stdout: list[str]
+    """Absolute paths to the run's stdout logs."""
+
+
+class CrashLogPaths(LogPaths):
+    """Log paths from a run that can crash, adding the crash diagnostics."""
+
+    crashdata: list[str]
+    """Absolute paths to the run's crash diagnostics: an ASAN/UBSAN report, or
+    a bare assertion or abort message when the process died without one."""
 
 
 class BrowserCrashInfo(ToolModel):
@@ -61,10 +57,9 @@ class BrowserCrashInfo(ToolModel):
     message: str
     """Summary of the Firefox run outcome."""
 
-    logs: LogPaths
-    """Paths to this run's complete, untruncated Firefox logs on disk,
-    categorized into stderr/stdout/crashdata. The log contents are NOT in this
-    response - read or grep the listed files."""
+    logs: CrashLogPaths
+    """Paths to the run's stderr/stdout/crashdata log files. The ASAN report is
+    in crashdata (log_ffp_asan_<pid>.txt), not stderr."""
 
     crashed_parent: bool | None = None
     """True if the crash occurred in the parent process."""
