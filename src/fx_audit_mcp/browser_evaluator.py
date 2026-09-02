@@ -70,16 +70,20 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
         # Grizzly calls handle_hang() only when a run hits its time limit, but
         # produces a hang report solely for busy hangs on Linux (elsewhere, and
         # for idle hangs, the browser is just closed), so this flag is then the
-        # only record that the run timed out rather than finishing cleanly.
+        # only record that the browser was still busy when the limit expired.
         self.hang_detected = False
 
     def handle_hang(
         self, ignore_idle: bool = True, ignore_timeout: bool = False
-    ) -> bool:  # pragma: no cover
-        self.hang_detected = True
-        return super().handle_hang(
+    ) -> bool:
+        was_idle = super().handle_hang(
             ignore_idle=ignore_idle, ignore_timeout=ignore_timeout
         )
+        # Only a browser still burning CPU at the time limit is a hang; an idle
+        # one finished its work and simply stopped requesting files, which is a
+        # clean run and must not be reported as a timeout.
+        self.hang_detected = not was_idle
+        return was_idle
 
     def launch(self, location: str) -> None:  # pragma: no cover
         """Override to capture parent PID right after Firefox launches."""
