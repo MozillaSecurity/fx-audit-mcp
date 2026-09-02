@@ -122,11 +122,10 @@ async def build_firefox(
     mozconfig_path: Path,
     ctx: Context | None = None,
 ) -> BuildResult:
-    """Build the Firefox binary needed by browser_evaluator: invokes
-    ``mach build`` with the given MOZCONFIG (typically an ASAN fuzzing config)
-    and returns the objdir on success.
+    """Build the Firefox binary needed by browser_evaluator.
 
-    The build output directory is determined automatically from the
+    Invokes ``mach build`` with the given MOZCONFIG and returns the objdir on
+    success. The build output directory is determined automatically from the
     MOZCONFIG via ``mach environment`` and returned as ``build_dir``.
 
     Logs are written to a temporary directory. The caller is responsible for

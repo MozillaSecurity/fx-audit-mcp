@@ -22,19 +22,14 @@ async def js_shell_evaluator(
     timeout: int = 30,
     flags: list[str] | None = None,
 ) -> JSShellCrashInfo:
-    """Reproduce a SpiderMonkey JS crash by running JS source code in the
-    SpiderMonkey shell with --fuzzing-safe and detecting ASAN/UBSAN output
-    or signal exits.
+    """Run a JS testcase in the SpiderMonkey shell and report whether it crashed.
 
-    Always runs the shell with ``--fuzzing-safe``. A crash is reported when
-    the shell exits via signal (negative exit code) or when
-    ``AddressSanitizer`` / ``UndefinedBehaviorSanitizer`` appears in stderr;
-    JS errors (positive non-zero exit) are not treated as crashes. Logs are
-    written to a temporary directory. The caller is responsible for cleanup.
+    The shell always runs with ``--fuzzing-safe``. A JS error is not a crash.
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
 
     Args:
         content: Testcase JS source code as a string (not a filename or path).
-            The tool writes it to a temp file and runs that.
         js_binary: Path to the SpiderMonkey JS shell binary (e.g.
             ``/path/to/firefox/obj-fuzz/dist/bin/js``).
         timeout: Per-run timeout in seconds before the shell is killed.
