@@ -28,6 +28,7 @@ from fx_audit_mcp.browser_evaluator import (
     browser_evaluator,
     package_testcase,
 )
+from fx_audit_mcp.logs import LOG_DIR_PREFIX
 from fx_audit_mcp.models import CrashLogPaths
 
 be_module = sys.modules["fx_audit_mcp.browser_evaluator"]
@@ -425,10 +426,10 @@ class TestBrowserEvaluator:
         assert not list(temp_root.iterdir())
 
     @pytest.mark.anyio
-    async def test_launch_timeout_without_report_raises(
-        self, tmp_path: Path, mocker: MockerFixture
+    async def test_launch_timeout_removes_empty_log_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
     ) -> None:
-        """A launch timeout with no crash report raises instead of returning."""
+        """A launch timeout with no report leaves no empty log directory behind."""
         firefox_binary = tmp_path / "firefox"
         firefox_binary.touch()
         testcase_file = tmp_path / "test.html"
@@ -441,12 +442,16 @@ class TestBrowserEvaluator:
         replay = mocker.patch.object(be_module, "ReplayManager").return_value
         replay.__enter__.return_value.run.side_effect = TargetLaunchTimeout
 
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
         with pytest.raises(TimeoutError, match="failed to launch"):
             await browser_evaluator(
                 file_paths={"test.html": testcase_file},
                 entry_point="test.html",
                 firefox_binary=firefox_binary,
             )
+        assert not list(temp_root.glob(f"{LOG_DIR_PREFIX}*"))
 
     @staticmethod
     def _mock_replay(
