@@ -1,10 +1,12 @@
 """Evaluate testcase tool for testing vulnerabilities in NSS via GTest."""
 
-import asyncio
-import os
 from pathlib import Path
 
-from .models import Logs, NSSGtestCrashInfo
+from .logs import log_contains
+from .models import NSSGtestCrashInfo
+from .process_runner import run
+
+ASAN_MARKER = "AddressSanitizer"
 
 
 async def nss_gtest_evaluator(
@@ -19,10 +21,8 @@ async def nss_gtest_evaluator(
     NSS_CYCLES / GTESTFILTER set. A crash is reported when
     ``AddressSanitizer`` appears in stdout or stderr; a non-zero exit
     without ASan output is a gtest failure, not a crash. Timed-out runs
-    are killed.
-
-    On ``crashed: false`` examine ``logs.stderr`` / ``logs.stdout`` for the
-    failure mode. On ``crashed: true`` the stack trace is in ``logs.stderr``.
+    are killed. Logs are written to a temporary directory. The caller is
+    responsible for cleanup.
 
     Args:
         gtest_name: GTest filter (e.g. ``SuiteName.TestName``) passed via
@@ -32,64 +32,38 @@ async def nss_gtest_evaluator(
         timeout: Per-run timeout in seconds before the gtest is killed.
 
     Returns:
-        NSSGtestCrashInfo.
+        NSSGtestCrashInfo with:
+        - crashed: Boolean indicating if the testcase triggered a crash.
+        - timed_out: Boolean indicating if the testcase timed out.
+        - exit_code: The harness's exit status.
+        - logs: Paths to the run's stdout/stderr/crashdata log files.
     """
-    try:
-        process = await asyncio.create_subprocess_exec(
-            str(firefox_dir / "security/nss/tests/all.sh"),
-            cwd=firefox_dir,
-            env={
-                **os.environ,
-                "DOMSUF": "localdomain",
-                "HOST": "localhost",
-                "NSS_TESTS": "gtests ssl_gtests",
-                "NSS_CYCLES": "standard",
-                "GTESTFILTER": gtest_name,
-            },
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
-            )
-        except TimeoutError:
-            process.kill()
-            await process.communicate()
-            return NSSGtestCrashInfo(
-                crashed=False,
-                message=f"Timed out after {timeout}s",
-                logs=Logs(stderr="", stdout=""),
-            )
+    result = await run(
+        str(firefox_dir / "security/nss/tests/all.sh"),
+        timeout=timeout,
+        cwd=firefox_dir,
+        extra_env={
+            "DOMSUF": "localdomain",
+            "HOST": "localhost",
+            "NSS_TESTS": "gtests ssl_gtests",
+            "NSS_CYCLES": "standard",
+            "GTESTFILTER": gtest_name,
+        },
+    )
 
-        stdout_output = stdout.decode("utf-8", errors="replace") if stdout else ""
-        stderr_output = stderr.decode("utf-8", errors="replace") if stderr else ""
+    # A timed-out run is never a crash, so its partial output is not scanned
+    # for a report and no log is named as crashdata.
+    crashdata: list[Path] = []
+    if not result.timed_out:
+        crashdata = [
+            path
+            for path in (result.stdout, result.stderr)
+            if log_contains(path, ASAN_MARKER)
+        ]
 
-        if "AddressSanitizer" in stdout_output or "AddressSanitizer" in stderr_output:
-            return NSSGtestCrashInfo(
-                crashed=True,
-                message="ASan crash detected",
-                logs=Logs(stdout=stdout_output, stderr=stderr_output),
-            )
-
-        if process.returncode == 0:
-            return NSSGtestCrashInfo(
-                crashed=False,
-                message="No crash detected",
-                logs=Logs(stdout=stdout_output, stderr=stderr_output),
-            )
-
-        return NSSGtestCrashInfo(
-            crashed=False,
-            message=(
-                f"Gtest exited with code {process.returncode}"
-                " (Gtest error, not a crash)"
-            ),
-            logs=Logs(stdout=stdout_output, stderr=stderr_output),
-        )
-    except Exception as e:
-        return NSSGtestCrashInfo(
-            crashed=False,
-            message=f"Error running NSS GTest: {type(e).__name__}: {e!s}",
-        )
+    return NSSGtestCrashInfo(
+        crashed=bool(crashdata),
+        timed_out=result.timed_out,
+        exit_code=result.exit_code,
+        logs=result.crash_logs(crashdata),
+    )
