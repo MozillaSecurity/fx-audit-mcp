@@ -149,6 +149,22 @@ async def test_assertion_abort_still_reports_crashdata(
 
 
 @pytest.mark.anyio
+async def test_signal_death_with_no_output_reports_no_crashdata(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """Verify that a crash that printed nothing leaves crashdata empty."""
+    mocker.patch(RUN, AsyncMock(return_value=make_run_result(exit_code=-9)))
+
+    result = await js_shell_evaluator("hog()", js_binary)
+
+    assert result.crashed is True
+    # The empty stderr log is still written; only crashdata skips it, since
+    # naming it would advertise diagnostics the run never produced.
+    assert result.logs.crashdata == []
+    assert Path(result.logs.stderr[0]).read_bytes() == b""
+
+
+@pytest.mark.anyio
 async def test_testcase_is_run_under_a_stable_name(
     mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
 ) -> None:
