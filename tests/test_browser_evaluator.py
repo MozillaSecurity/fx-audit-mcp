@@ -541,6 +541,34 @@ class TestBrowserEvaluator:
         assert Path(result.logs.stderr[0]).read_text(encoding="utf-8") == "still busy\n"
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize("hang_detected", [True, False])
+    async def test_empty_results_reports_hang_flag_as_timed_out(
+        self, tmp_path: Path, mocker: MockerFixture, hang_detected: bool
+    ) -> None:
+        """With no replay results, timed_out mirrors the target's hang flag."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        target.hang_detected = hang_detected
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.return_value = []
+
+        result = await browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            firefox_binary=firefox_binary,
+        )
+
+        assert result.timed_out is hang_detected
+        assert result.crashed is False
+
+    @pytest.mark.anyio
     async def test_crash_result_reports_attributed_crash(
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:
