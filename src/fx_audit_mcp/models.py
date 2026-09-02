@@ -122,14 +122,11 @@ class BuildResult(ToolModel):
     success: bool
     """True if the build completed successfully."""
 
-    message: str
-    """Summary of the build outcome."""
+    exit_code: int
+    """The build's exit status. Negative means killed by that signal."""
+
+    logs: LogPaths
+    """Paths to the build's stdout/stderr log files."""
 
     build_dir: str | None = None
     """Absolute path to the build output directory on success."""
-
-    stdout: str | None = None
-    """Captured build stdout (may be truncated for large builds)."""
-
-    stderr: str | None = None
-    """Captured build stderr (may be truncated for large builds)."""

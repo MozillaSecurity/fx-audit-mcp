@@ -4,6 +4,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from .logs import write_logs
 from .models import BuildResult
 
 
@@ -14,11 +15,18 @@ async def build_nss(firefox_dir: Path) -> BuildResult:
     Symlinks ``nsprpub`` into the location NSS's build expects (``../nspr``
     relative to ``security/nss``) before invoking the build.
 
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
+
     Args:
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
 
     Returns:
-        BuildResult with the build directory path on success.
+        BuildResult with:
+        - success: Boolean indicating if the build completed successfully.
+        - exit_code: The build's exit status.
+        - logs: Paths to the build's stdout/stderr log files.
+        - build_dir: The build directory on success.
     """
     nspr_dir = firefox_dir / "nsprpub"
     nss_dir = firefox_dir / "security/nss"
@@ -52,21 +60,20 @@ async def build_nss(firefox_dir: Path) -> BuildResult:
     )
 
     stdout, stderr = await process.communicate()
-    stdout_output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    stderr_output = stderr.decode("utf-8", errors="replace") if stderr else ""
+    # communicate() only returns once the process has exited.
+    assert process.returncode is not None
+    logs = write_logs(stdout or b"", stderr or b"")
 
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=str(build_dir),
-            message="NSS build completed successfully",
-            stdout=stdout_output,
-            stderr=stderr_output,
+            exit_code=process.returncode,
+            logs=logs,
         )
 
     return BuildResult(
         success=False,
-        message=f"NSS build failed with exit code {process.returncode}",
-        stdout=stdout_output,
-        stderr=stderr_output,
+        exit_code=process.returncode,
+        logs=logs,
     )

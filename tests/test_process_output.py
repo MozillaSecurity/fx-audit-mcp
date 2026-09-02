@@ -31,7 +31,7 @@ class _BlockingStream:
 
 @pytest.mark.anyio
 async def test_flushes_incomplete_utf8_at_eof() -> None:
-    """Emits replacement text when UTF-8 ends mid-character."""
+    """Emits replacement text when UTF-8 ends mid-character, returning raw bytes."""
     output: list[tuple[str, str]] = []
 
     async def on_output(text: str, stream_name: str) -> None:
@@ -41,8 +41,8 @@ async def test_flushes_incomplete_utf8_at_eof() -> None:
         _Stream([b"partial \xf0"]), _Stream([]), on_output
     )
 
-    assert stdout == "partial �"
-    assert stderr == ""
+    assert stdout == b"partial \xf0"
+    assert stderr == b""
     assert output[-1] == ("�", "stdout")
 
 
