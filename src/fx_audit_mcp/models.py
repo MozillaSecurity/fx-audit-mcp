@@ -98,7 +98,9 @@ class JSShellCrashInfo(ToolModel):
     """True if the testcase timed out."""
 
     exit_code: int
-    """The shell's exit status. Negative means killed by that signal."""
+    """The shell's exit status. On POSIX, negative means killed by that
+    signal. On Windows, a value in the NTSTATUS error range (0xC0000000 and
+    up) is an unhandled exception."""
 
     logs: CrashLogPaths
     """Paths to the run's stdout/stderr/crashdata log files. Crash diagnostics
@@ -125,7 +127,8 @@ class BuildResult(ToolModel):
     """True if the build completed successfully."""
 
     exit_code: int
-    """The build's exit status. Negative means killed by that signal."""
+    """The build's exit status. On POSIX, negative means killed by that
+    signal."""
 
     logs: LogPaths
     """Paths to the build's stdout/stderr log files."""
