@@ -9,9 +9,9 @@ from .models import BuildResult
 
 
 async def build_nss(firefox_dir: Path) -> BuildResult:
-    """Build the ASAN-instrumented NSS libraries needed by nss_gtest_evaluator:
-    invokes ``security/nss/build.sh -c --asan`` and returns the build directory.
+    """Build the ASAN-instrumented NSS libraries needed by nss_gtest_evaluator.
 
+    Invokes ``security/nss/build.sh -c --asan`` and returns the build directory.
     Symlinks ``nsprpub`` into the location NSS's build expects (``../nspr``
     relative to ``security/nss``) before invoking the build.
 

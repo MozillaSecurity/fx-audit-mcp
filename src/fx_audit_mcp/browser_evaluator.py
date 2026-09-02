@@ -427,12 +427,10 @@ async def browser_evaluator(  # pragma: no cover
     cannot be disabled by the caller.
 
     Ignored-signature matches (loaded from ``ignored_signatures/``) are
-    filtered out before this returns. Logs are never returned inline: the
-    complete, untruncated Firefox logs are written to a fresh temporary
-    directory and the returned ``logs`` holds their paths, categorized into
-    stderr/stdout/crashdata, so they can be read, grepped and tailed with file
-    tools. That directory is never deleted; the caller owns it and is
-    responsible for removing it.
+    filtered out before this returns.
+
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
 
     Args:
         file_paths: Testcase files, as a mapping of the name each file should

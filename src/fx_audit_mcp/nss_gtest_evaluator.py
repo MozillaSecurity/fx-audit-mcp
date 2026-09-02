@@ -14,19 +14,21 @@ async def nss_gtest_evaluator(
     firefox_dir: Path,
     timeout: int = 30,
 ) -> NSSGtestCrashInfo:
-    """Reproduce an NSS AddressSanitizer crash by running a specific NSS GTest
-    filter and reporting any ASAN output.
+    """Run an NSS GTest testcase and report whether it crashed.
 
-    Invokes ``security/nss/tests/all.sh`` with DOMSUF / HOST / NSS_TESTS /
-    NSS_CYCLES / GTESTFILTER set. A crash is reported when
-    ``AddressSanitizer`` appears in stdout or stderr; a non-zero exit
-    without ASan output is a gtest failure, not a crash. Timed-out runs
-    are killed. Logs are written to a temporary directory. The caller is
-    responsible for cleanup.
+    Invokes ``security/nss/tests/all.sh`` with these environment variables set:
+
+    - DOMSUF=localdomain
+    - HOST=localhost
+    - NSS_TESTS="gtests ssl_gtests"
+    - NSS_CYCLES=standard
+    - GTESTFILTER=<gtest_name>
+
+    A gtest failure is not a crash. Logs are written to a temporary
+    directory. The caller is responsible for cleanup.
 
     Args:
-        gtest_name: GTest filter (e.g. ``SuiteName.TestName``) passed via
-            GTESTFILTER.
+        gtest_name: GTest filter (e.g. ``SuiteName.TestName``).
         firefox_dir: Path to the Firefox source tree (where
             ``security/nss/tests/all.sh`` lives).
         timeout: Per-run timeout in seconds before the gtest is killed.

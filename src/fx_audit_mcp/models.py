@@ -40,7 +40,7 @@ class BrowserCrashInfo(ToolModel):
     """Result of running a testcase under Firefox via browser_evaluator."""
 
     crashed: bool
-    """True if Firefox crashed while running the testcase."""
+    """True if the testcase triggered a crash."""
 
     timed_out: bool
     """True if the testcase timed out: a browser process was still busy when
@@ -76,7 +76,7 @@ class JSShellCrashInfo(ToolModel):
     """Result of running a testcase under the SpiderMonkey JS shell."""
 
     crashed: bool
-    """True if the JS shell crashed while running the testcase."""
+    """True if the testcase triggered a crash."""
 
     timed_out: bool
     """True if the testcase timed out."""
@@ -93,10 +93,10 @@ class JSShellCrashInfo(ToolModel):
 
 
 class NSSGtestCrashInfo(ToolModel):
-    """Result of running an NSS gtest under AddressSanitizer."""
+    """Result of running an NSS gtest via nss_gtest_evaluator."""
 
     crashed: bool
-    """True if AddressSanitizer detected a crash."""
+    """True if the testcase triggered a crash."""
 
     timed_out: bool
     """True if the testcase timed out."""
