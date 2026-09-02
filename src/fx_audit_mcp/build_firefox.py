@@ -11,6 +11,7 @@ from shutil import which
 
 from fastmcp import Context
 
+from .logs import write_logs
 from .models import BuildResult
 from .process_output import stream_process_output
 
@@ -128,6 +129,9 @@ async def build_firefox(
     The build output directory is determined automatically from the
     MOZCONFIG via ``mach environment`` and returned as ``build_dir``.
 
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
+
     Args:
         firefox_dir: Path to the Firefox source directory (e.g. ``./firefox``).
         mozconfig_path: Path to the MOZCONFIG file controlling build flags
@@ -136,7 +140,11 @@ async def build_firefox(
             When absent, output is written directly to stdout/stderr.
 
     Returns:
-        BuildResult with ``build_dir`` set to the objdir on success.
+        BuildResult with:
+        - success: Boolean indicating if the build completed successfully.
+        - exit_code: The build's exit status.
+        - logs: Paths to the build's stdout/stderr log files.
+        - build_dir: The objdir on success.
     """
     if not firefox_dir.exists():
         raise FileNotFoundError(f"Firefox directory not found at {firefox_dir}")
@@ -211,20 +219,21 @@ async def build_firefox(
         raise
 
     await process.wait()
+    # wait() has returned, so the process has exited.
+    assert process.returncode is not None
+    logs = write_logs(stdout_output, stderr_output)
     if process.returncode == 0:
         return BuildResult(
             success=True,
             build_dir=build_dir,
-            message="Firefox build completed successfully",
-            stdout=stdout_output,
-            stderr=stderr_output,
+            exit_code=process.returncode,
+            logs=logs,
         )
 
     return BuildResult(
         success=False,
-        message=f"Firefox build failed with exit code {process.returncode}",
-        stdout=stdout_output,
-        stderr=stderr_output,
+        exit_code=process.returncode,
+        logs=logs,
     )
 
 
@@ -245,9 +254,14 @@ def main() -> None:
     result = asyncio.run(build_firefox(args.firefox_dir, mozconfig_path))
 
     print(f"Success: {result.success}")
-    print(f"Message: {result.message}")
+    print(f"Exit code: {result.exit_code}")
     if result.build_dir:
         print(f"Build dir: {result.build_dir}")
+    if result.logs.stdout:
+        # The build already streamed to this terminal, so these files are a
+        # duplicate; name the directory so it can be removed rather than
+        # accumulating one full build log per invocation.
+        print(f"Logs: {Path(result.logs.stdout[0]).parent}")
 
     sys.exit(0 if result.success else 1)
 

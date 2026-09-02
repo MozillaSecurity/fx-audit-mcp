@@ -12,7 +12,7 @@ async def stream_process_output(
     stdout: asyncio.StreamReader,
     stderr: asyncio.StreamReader,
     on_output: OutputCallback,
-) -> tuple[str, str]:
+) -> tuple[bytes, bytes]:
     """Drain two subprocess streams concurrently and report decoded chunks.
 
     Args:
@@ -22,14 +22,15 @@ async def stream_process_output(
             (``"stdout"`` or ``"stderr"``).
 
     Returns:
-        Complete UTF-8-decoded stdout and stderr contents.
+        Complete stdout and stderr contents as raw bytes, so callers can
+        persist them byte-exact. The callback still receives decoded text.
 
     Raises:
         BaseException: Propagates callback or stream failures after cancelling
             and awaiting the sibling reader.
     """
 
-    async def read_stream(stream: asyncio.StreamReader, stream_name: str) -> str:
+    async def read_stream(stream: asyncio.StreamReader, stream_name: str) -> bytes:
         captured = bytearray()
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         while chunk := await stream.read(STREAM_CHUNK_SIZE):
@@ -40,7 +41,7 @@ async def stream_process_output(
         text = decoder.decode(b"", final=True)
         if text:
             await on_output(text, stream_name)
-        return captured.decode("utf-8", errors="replace")
+        return bytes(captured)
 
     output_tasks = (
         asyncio.create_task(read_stream(stdout, "stdout")),

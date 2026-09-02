@@ -108,9 +108,9 @@ async def test_successful_build(mocker: MockerFixture, tmp_path: Path) -> None:
 
     assert result.success is True
     assert result.build_dir == _DUMMY_OBJDIR
-    assert result.message == "Firefox build completed successfully"
-    assert result.stdout is not None and "Build succeeded" in result.stdout
-    assert result.stderr is not None and "Warning: something" in result.stderr
+    assert result.exit_code == 0
+    assert Path(result.logs.stdout[0]).read_bytes() == b"Build succeeded\n"
+    assert Path(result.logs.stderr[0]).read_bytes() == b"Warning: something\n"
 
 
 @pytest.mark.anyio
@@ -129,9 +129,9 @@ async def test_failed_build(mocker: MockerFixture, tmp_path: Path) -> None:
     result = await build_firefox(firefox_dir, mozconfig)
 
     assert result.success is False
-    assert "failed with exit code 1" in result.message
-    assert result.stdout is not None and "Build output" in result.stdout
-    assert result.stderr is not None and "Error: build failed" in result.stderr
+    assert result.exit_code == 1
+    assert Path(result.logs.stdout[0]).read_bytes() == b"Build output\n"
+    assert Path(result.logs.stderr[0]).read_bytes() == b"Error: build failed\n"
 
 
 @pytest.mark.anyio
@@ -199,7 +199,7 @@ async def test_long_output_line_is_streamed(
     result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig")
 
     assert result.success is True
-    assert result.stdout == output.decode()
+    assert Path(result.logs.stdout[0]).read_bytes() == output
 
 
 @pytest.mark.anyio
@@ -246,7 +246,7 @@ async def test_context_failure_disables_notifications(
     result = await build_firefox(tmp_path / "firefox", tmp_path / "mozconfig", ctx=ctx)
 
     assert result.success is True
-    assert result.stdout == "out line\nmore\n"
+    assert Path(result.logs.stdout[0]).read_bytes() == b"out line\nmore\n"
     ctx.info.assert_awaited_once()
     mock_process.terminate.assert_not_called()
 
@@ -439,7 +439,7 @@ class TestMain:
             ],
         )
         result_obj: MagicMock = mocker.MagicMock(
-            success=False, build_dir=None, stdout="out", stderr="err", message="failed"
+            success=False, build_dir=None, exit_code=1
         )
 
         async def _fake_build(*_args: object, **_kwargs: object) -> MagicMock:
@@ -471,9 +471,7 @@ class TestMain:
         result_obj: MagicMock = mocker.MagicMock(
             success=True,
             build_dir="/path/to/obj",
-            stdout="out",
-            stderr="err",
-            message="ok",
+            exit_code=0,
         )
 
         async def _fake_build(*_args: object, **_kwargs: object) -> MagicMock:
