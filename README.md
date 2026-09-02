@@ -154,7 +154,15 @@ A run that hits its time limit does not raise: the evaluators return
 hang. For the browser this means a process was still busy executing when the
 window expired (it is aborted to capture stacks); an idle browser at the time
 limit is a normal clean run, since testcases are not expected to close the
-browser. A timed-out run is never reported as a crash.
+browser. A timed-out browser is never reported as a crash, since the report
+that abort produces is a hang.
+
+The JS shell and NSS gtest evaluators do report a crash on a timed-out run,
+when the log holds a sanitizer report the process finished writing — UBSAN does
+not halt on error, so a testcase can trip it and then hang. Since a kill can
+cut a report off mid-stack, a timeout is judged on the report's closing
+`SUMMARY:` line rather than any mention of the sanitizer, and the exit code is
+ignored because it is the kill signal rather than a fault.
 
 ## Development
 

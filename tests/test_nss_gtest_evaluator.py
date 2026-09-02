@@ -86,10 +86,10 @@ async def test_nonzero_exit_without_asan_is_gtest_error(
 
 
 @pytest.mark.anyio
-async def test_timed_out_run_is_never_a_crash(
+async def test_timed_out_run_with_a_partial_report_is_not_a_crash(
     mocker: MockerFixture, make_run_result: MakeRunResult, firefox_dir: Path
 ) -> None:
-    """Partial output is not scanned for a report once the run has timed out."""
+    """A report cut off by the kill must not read as a crash."""
     mocker.patch(
         RUN,
         AsyncMock(
@@ -104,6 +104,29 @@ async def test_timed_out_run_is_never_a_crash(
     assert result.timed_out is True
     assert result.crashed is False
     assert result.logs.crashdata == []
+
+
+@pytest.mark.anyio
+async def test_timed_out_run_with_a_complete_report_is_a_crash(
+    mocker: MockerFixture, make_run_result: MakeRunResult, firefox_dir: Path
+) -> None:
+    """A report the harness finished writing is a crash even if it then hung."""
+    report = (
+        b"==1==ERROR: AddressSanitizer: heap-use-after-free\n"
+        b"SUMMARY: AddressSanitizer: heap-use-after-free\n"
+    )
+    mocker.patch(
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(exit_code=-9, timed_out=True, stdout=report)
+        ),
+    )
+
+    result = await nss_gtest_evaluator("Suite.Test", firefox_dir, timeout=1)
+
+    assert result.timed_out is True
+    assert result.crashed is True
+    assert result.logs.crashdata == result.logs.stdout
 
 
 @pytest.mark.anyio

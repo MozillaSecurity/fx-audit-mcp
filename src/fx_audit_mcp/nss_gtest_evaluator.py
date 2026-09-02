@@ -7,6 +7,9 @@ from .models import NSSGtestCrashInfo
 from .process_runner import run
 
 ASAN_MARKER = "AddressSanitizer"
+# The closing line of an ASAN report. A kill can cut a report off mid-stack, so
+# this is what proves the harness finished writing one before it was killed.
+TERMINAL_ASAN_MARKER = f"SUMMARY: {ASAN_MARKER}"
 
 
 async def nss_gtest_evaluator(
@@ -24,8 +27,11 @@ async def nss_gtest_evaluator(
     - NSS_CYCLES=standard
     - GTESTFILTER=<gtest_name>
 
-    A gtest failure is not a crash. Logs are written to a temporary
-    directory. The caller is responsible for cleanup.
+    A gtest failure is not a crash, and neither is being killed at the time
+    limit, but a run that trips ASAN and then keeps going is: a timed-out run
+    is still a crash when the log holds a report the harness finished writing.
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup.
 
     Args:
         gtest_name: GTest filter (e.g. ``SuiteName.TestName``).
@@ -53,15 +59,14 @@ async def nss_gtest_evaluator(
         },
     )
 
-    # A timed-out run is never a crash, so its partial output is not scanned
-    # for a report and no log is named as crashdata.
-    crashdata: list[Path] = []
-    if not result.timed_out:
-        crashdata = [
-            path
-            for path in (result.stdout, result.stderr)
-            if log_contains(path, ASAN_MARKER)
-        ]
+    # A timed-out run still gets scanned: the harness is killed once the limit
+    # expires, but a report it finished writing before then is a crash. Its
+    # output can stop mid-report, so a timeout is judged on the closing line
+    # alone rather than on any mention of the sanitizer.
+    marker = TERMINAL_ASAN_MARKER if result.timed_out else ASAN_MARKER
+    crashdata = [
+        path for path in (result.stdout, result.stderr) if log_contains(path, marker)
+    ]
 
     return NSSGtestCrashInfo(
         crashed=bool(crashdata),

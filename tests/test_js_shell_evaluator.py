@@ -88,10 +88,10 @@ async def test_js_error_returns_its_output(
 
 
 @pytest.mark.anyio
-async def test_timed_out_run_is_never_a_crash(
+async def test_timed_out_run_with_a_partial_report_is_not_a_crash(
     mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
 ) -> None:
-    """The kill signal's exit code and any partial output must not read as a crash."""
+    """The kill signal's exit code and a cut-off report must not read as a crash."""
     mocker.patch(
         RUN,
         AsyncMock(
@@ -106,6 +106,32 @@ async def test_timed_out_run_is_never_a_crash(
     assert result.timed_out is True
     assert result.crashed is False
     assert result.logs.crashdata == []
+
+
+@pytest.mark.parametrize("marker", ["AddressSanitizer", "UndefinedBehaviorSanitizer"])
+@pytest.mark.anyio
+async def test_timed_out_run_with_a_complete_report_is_a_crash(
+    mocker: MockerFixture,
+    make_run_result: MakeRunResult,
+    js_binary: Path,
+    marker: str,
+) -> None:
+    """A report the shell finished writing is a crash even if it then hung."""
+    report = f"==1==ERROR: {marker}: boom\nSUMMARY: {marker}: undefined-behavior\n"
+    mocker.patch(
+        RUN,
+        AsyncMock(
+            return_value=make_run_result(
+                exit_code=-9, timed_out=True, stderr=report.encode()
+            )
+        ),
+    )
+
+    result = await js_shell_evaluator("ub(); while(1){}", js_binary, timeout=1)
+
+    assert result.timed_out is True
+    assert result.crashed is True
+    assert result.logs.crashdata == result.logs.stderr
 
 
 @pytest.mark.anyio
