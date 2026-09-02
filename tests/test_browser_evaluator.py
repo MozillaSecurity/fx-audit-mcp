@@ -590,6 +590,35 @@ class TestBrowserEvaluator:
         assert result.crashed is False
 
     @pytest.mark.anyio
+    async def test_idle_polling_waits_for_the_time_limit(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """The idle poll starts at the time limit so it cannot cut a run short."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        target.hang_detected = False
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        run = replay.__enter__.return_value.run
+        run.return_value = []
+
+        await browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            firefox_binary=firefox_binary,
+            timeout=7,
+        )
+
+        assert run.call_args.kwargs["idle_delay"] == 7
+        assert run.call_args.kwargs["time_limit"] == 7
+
+    @pytest.mark.anyio
     async def test_crash_result_reports_attributed_crash(
         self, tmp_path: Path, mocker: MockerFixture
     ) -> None:
