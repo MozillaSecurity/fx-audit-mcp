@@ -55,7 +55,7 @@ async def main():
         firefox_binary=Path("/path/to/obj-firefox-asan/dist/bin/firefox"),
         timeout=30,
     )
-    print(result.crashed, result.message)
+    print(result.crashed, result.timed_out)
     # Complete, untruncated logs are on disk; result.logs holds their paths,
     # grouped into stderr/stdout/crashdata.
     # The ASAN report is in crashdata (log_ffp_asan_<pid>.txt), not stderr.
@@ -130,18 +130,31 @@ agent = Agent(
 
 ## Crash Detection
 
+Every tool writes complete logs to a fresh temp directory each run and
+returns their paths in `logs` instead of the contents, so they can be grepped
+rather than truncated to fit. The build tools return `stderr`/`stdout`; the
+evaluators add `crashdata`.
+The directory is never deleted and logs are unbounded, so callers should clean
+up — take the parent of any returned path. The returned paths are only
+meaningful to a client sharing a filesystem with the server.
+
 - **browser_evaluator**: Crash signatures in `ignored_signatures/` (FuzzManager
   format) are filtered out before returning, so common shutdown hangs don't
-  pollute results. Complete logs are written to a fresh temp directory each
-  run and `logs` returns their paths (grouped into `stderr`/`stdout`/
-  `crashdata`) instead of the contents, so they can be grepped rather than
-  truncated to fit. The directory is never deleted and logs are unbounded, so
-  callers should clean up — take the parent of any returned path. The returned
-  paths are only meaningful to a client sharing a filesystem with the server.
+  pollute results. The ASAN report is in `crashdata`
+  (`log_ffp_asan_<pid>.txt`), not `stderr`.
 - **js_shell_evaluator**: Detects crashes via negative exit code (signal) or
   `AddressSanitizer`/`UndefinedBehaviorSanitizer` in stderr. JS errors (positive
-  exit codes) are not treated as crashes.
-- **nss_gtest_evaluator**: Detects `AddressSanitizer` in stdout or stderr.
+  exit codes) are not treated as crashes. Crash diagnostics arrive on stderr,
+  so on a crash `crashdata` names that same stderr file.
+- **nss_gtest_evaluator**: Detects `AddressSanitizer` in stdout or stderr, and
+  `crashdata` names whichever of those files carried the report.
+
+A run that hits its time limit does not raise: the evaluators return
+`timed_out: true` with the logs, which show how far the run got before the
+hang. For the browser this means a process was still busy executing when the
+window expired (it is aborted to capture stacks); an idle browser at the time
+limit is a normal clean run, since testcases are not expected to close the
+browser. A timed-out run is never reported as a crash.
 
 ## Development
 

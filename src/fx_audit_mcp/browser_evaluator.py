@@ -475,10 +475,6 @@ async def browser_evaluator(  # pragma: no cover
         disable_sandboxing=not enable_sandbox,
         display_mode=display_mode,
         launch_timeout=30,
-        # log_limit/memory_limit: ffpuppet watchdogs (0 = no kill threshold).
-        # report_size_limit: 0 disables grizzly's destructive log tailing, so
-        # the saved logs are complete. Swap in a large finite byte count if a
-        # pathological run ever makes grizzly's own in-memory log parsing OOM.
         log_limit=0,
         memory_limit=0,
         report_size_limit=0,
