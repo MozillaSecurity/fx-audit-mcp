@@ -453,6 +453,41 @@ class TestBrowserEvaluator:
             )
         assert not list(temp_root.glob(f"{LOG_DIR_PREFIX}*"))
 
+    @pytest.mark.anyio
+    async def test_launch_timeout_with_report_names_log_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        """A launch timeout with logs but no crashdata keeps and names the log dir."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        (report_dir / "log_stderr.txt").write_text("launch diagnostics")
+        (report_dir / "log_asan_blank.txt").write_text("")
+
+        target = mocker.MagicMock()
+        target.launch_timeout_report.path = report_dir
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.side_effect = TargetLaunchTimeout
+
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        with pytest.raises(TimeoutError, match="failed to launch") as excinfo:
+            await browser_evaluator(
+                file_paths={"test.html": testcase_file},
+                entry_point="test.html",
+                firefox_binary=firefox_binary,
+            )
+        (log_dir,) = temp_root.glob(f"{LOG_DIR_PREFIX}*")
+        assert str(log_dir) in str(excinfo.value)
+        assert (log_dir / "log_stderr.txt").read_text() == "launch diagnostics"
+
     @staticmethod
     def _mock_replay(
         mocker: MockerFixture,
