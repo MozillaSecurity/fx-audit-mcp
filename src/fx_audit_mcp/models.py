@@ -104,7 +104,8 @@ class JSShellCrashInfo(ToolModel):
 
     logs: CrashLogPaths
     """Paths to the run's stdout/stderr/crashdata log files. Crash diagnostics
-    arrive on stderr. On a crash, crashdata mirrors stderr."""
+    arrive on stderr. If a crash produces a sanitizer report or assertion,
+    crashdata mirrors stderr."""
 
 
 class NSSGtestCrashInfo(ToolModel):

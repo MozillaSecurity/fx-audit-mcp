@@ -71,9 +71,12 @@ async def js_shell_evaluator(
         died_on_fault or log_contains(result.stderr, *SANITIZER_MARKERS)
     )
     # A crash puts its diagnostics on stderr, sanitizer report or bare
-    # assertion message, so crashdata names that file.
+    # assertion message, so crashdata names that file. A process killed
+    # before it printed anything (SIGKILL from the OOM killer, a segfault
+    # in a build with no sanitizer) leaves it empty, and naming an empty
+    # file would promise diagnostics that aren't there.
     crashdata: list[Path] = []
-    if crashed:
+    if crashed and result.stderr.stat().st_size > 0:
         crashdata = [result.stderr]
 
     return JSShellCrashInfo(
