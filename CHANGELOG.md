@@ -2,6 +2,99 @@
 
 <!-- version list -->
 
+## v4.0.0 (2026-09-03)
+
+### Bug Fixes
+
+- Detect Windows NTSTATUS faults as crashes
+  ([`993a01e`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/993a01e7c51349fd1b9752ac3adee59d0cc89ae7))
+
+- Point the launch-timeout error at the captured launch logs
+  ([`784c27d`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/784c27d30b4d1de537e26bd4affc45395599247f))
+
+- Raise operational failures instead of returning messages
+  ([`e4f7215`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e4f72152ef6f1e37d8a3bb37d9d02c7efe70c8bb))
+
+- Raise when python3 is missing from PATH
+  ([`e9202ad`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/e9202ad5b55530cf3da32c4de9b12a8dff723ed4))
+
+- Remove the browser log directory when a run leaves it empty
+  ([`32040b2`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/32040b2a3b82b07791b4ce5357f8168302dae518))
+
+- Report a sanitizer crash found in a timed-out run
+  ([`229e901`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/229e9013ca60c085b797ea4c881207d75751633e))
+
+- Report an idle browser at the time limit as a clean run
+  ([`57c71bf`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/57c71bfafa8d0f1fe9c3606df820b490f051a31e))
+
+- Report bad build directories without a traceback
+  ([`a85c87e`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/a85c87ec1e7414c1c4feb731b37683fed8120fcf))
+
+- Report bad build invocations without a traceback
+  ([`7c65478`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/7c65478f406d3225cbde1ed8423ee51e4af52616))
+
+- Report hangs that produce no report as timed out
+  ([`fd4adac`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/fd4adac0dfcec0237f71347df08e8eea51db23ab))
+
+- Report no crashdata when a fault leaves stderr empty
+  ([`4327a37`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/4327a3772ea0665a9d9eb7811a924ffb3a775915))
+
+- Stop idle detection cutting runs short of their timeout
+  ([`8cb5d1f`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/8cb5d1f1026d6685ca11626cababc01fa8768542))
+
+- Unify the tool and schema descriptions shown to the agent
+  ([`ca5ec2d`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/ca5ec2d403d478d80407c67a2f0ac13d60847300))
+
+### Build System
+
+- **deps**: Raise the pydantic floor to 2.7 for attribute docstrings
+  ([`134894e`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/134894ed67222ea61c0323eb822a5f961e84eaed))
+
+### Documentation
+
+- Describe the log-path, exit-code and timeout contract
+  ([`99c8479`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/99c8479263b7e7d2781a4f940c5f76e20d49c798))
+
+### Features
+
+- Drop the browser result message and raise on launch timeout
+  ([`6cd5a3a`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/6cd5a3af8d9c263c0799e6642a5c30f947b2d371))
+
+- Drop the echoed testcase files from crash results
+  ([`4d2c1d2`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/4d2c1d258608af0341aecaa5fffc0fdf7e62b1ac))
+
+- Report a browser hang as timed_out rather than an error
+  ([`1a7383d`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/1a7383dab32dafd84787eed9a878acf67081065c))
+
+- Return log paths and exit codes from the build tools
+  ([`4acf794`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/4acf7946e04bfcbea54911226b1eff0f24800665))
+
+- Run JS shell testcases through the shared process runner
+  ([`f4c4bf4`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/f4c4bf48ede615cd9bb541f7ebc4d277f0633bc4))
+
+- Run NSS gtests through the shared process runner
+  ([`6e0ebad`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/6e0ebad599105ce6cf2643ad7ab19694e704a4a0))
+
+- Run subprocesses with output written to disk
+  ([`d0887ea`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/d0887ea26d06e83378cab47d44c442c523138df8))
+
+- **logs**: Add helpers for writing subprocess logs to disk
+  ([`f6d955c`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/f6d955cb1923a1d6a50946e0dd119f46363e5ebe))
+
+- **models**: Split crash log paths from build log paths
+  ([`de82828`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/de828286ce019ce95f20c3756525688f0cc9e9ed))
+
+### Refactoring
+
+- **models**: Document model fields with attribute docstrings
+  ([`66e193a`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/66e193af452b38c992d3c01629ff168f7db8de2b))
+
+### Testing
+
+- Guard the tool schemas the agent sees
+  ([`64727de`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/64727ded0100d4042817878d9bf9be3e64456fbb))
+
+
 ## v3.0.0 (2026-08-24)
 
 ### Features
