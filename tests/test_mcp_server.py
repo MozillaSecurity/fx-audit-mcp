@@ -12,6 +12,7 @@ EXPECTED_TOOLS = {
     "browser_evaluator",
     "package_testcase",
     "js_shell_evaluator",
+    "js_shell_differential_evaluator",
     "build_firefox",
     "build_nss",
     "nss_gtest_evaluator",

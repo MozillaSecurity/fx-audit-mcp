@@ -1,7 +1,8 @@
 """FastMCP server exposing all fx-audit-mcp execution tools.
 
 Serves browser_evaluator, package_testcase, js_shell_evaluator,
-build_firefox, build_nss, and nss_gtest_evaluator over stdio.
+js_shell_differential_evaluator, build_firefox, build_nss, and
+nss_gtest_evaluator over stdio.
 
 Configuration is via environment variables:
   FIREFOX_SOURCE_ROOT    — default Firefox source directory for build tools
@@ -19,6 +20,7 @@ from fastmcp import FastMCP
 from .browser_evaluator import browser_evaluator, package_testcase
 from .build_firefox import build_firefox
 from .build_nss import build_nss
+from .js_shell_differential_evaluator import js_shell_differential_evaluator
 from .js_shell_evaluator import js_shell_evaluator
 from .nss_gtest_evaluator import nss_gtest_evaluator
 
@@ -33,6 +35,7 @@ for _fn in (
     browser_evaluator,
     package_testcase,
     js_shell_evaluator,
+    js_shell_differential_evaluator,
     build_firefox,
     build_nss,
     nss_gtest_evaluator,
