@@ -138,9 +138,9 @@ async def test_harness_invocation(
 
     await nss_gtest_evaluator("Suite.MyTest", firefox_dir, timeout=42)
 
-    assert run_mock.call_args.args == (str(firefox_dir / "security/nss/tests/all.sh"),)
+    assert run_mock.call_args.args == ("./all.sh",)
     kwargs = run_mock.call_args.kwargs
-    assert kwargs["cwd"] == firefox_dir
+    assert kwargs["cwd"] == firefox_dir / "security/nss/tests"
     assert kwargs["timeout"] == 42
     assert kwargs["extra_env"] == {
         "DOMSUF": "localdomain",
