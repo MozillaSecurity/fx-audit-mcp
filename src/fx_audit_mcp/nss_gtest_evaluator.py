@@ -47,10 +47,12 @@ async def nss_gtest_evaluator(
         - exit_code: The harness's exit status.
         - logs: Paths to the run's stdout/stderr/crashdata log files.
     """
+    # gtests.sh derives the gtest source dir from $0, so an absolute path breaks
+    # tests that load JSON vectors (HPKE, Wycheproof).
     result = await run(
-        str(firefox_dir / "security/nss/tests/all.sh"),
+        "./all.sh",
         timeout=timeout,
-        cwd=firefox_dir,
+        cwd=firefox_dir / "security/nss/tests",
         extra_env={
             "DOMSUF": "localdomain",
             "HOST": "localhost",
