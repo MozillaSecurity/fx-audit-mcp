@@ -26,6 +26,7 @@ async def nss_gtest_evaluator(
     - NSS_TESTS="gtests ssl_gtests"
     - NSS_CYCLES=standard
     - GTESTFILTER=<gtest_name>
+    - ASAN_OPTIONS=handle_abort=1
 
     A gtest failure is not a crash, and neither is being killed at the time
     limit, but a run that trips ASAN and then keeps going is: a timed-out run
@@ -56,6 +57,7 @@ async def nss_gtest_evaluator(
             "NSS_TESTS": "gtests ssl_gtests",
             "NSS_CYCLES": "standard",
             "GTESTFILTER": gtest_name,
+            "ASAN_OPTIONS": "handle_abort=1",
         },
     )
 
