@@ -148,4 +148,5 @@ async def test_harness_invocation(
         "NSS_TESTS": "gtests ssl_gtests",
         "NSS_CYCLES": "standard",
         "GTESTFILTER": "Suite.MyTest",
+        "ASAN_OPTIONS": "handle_abort=1",
     }
