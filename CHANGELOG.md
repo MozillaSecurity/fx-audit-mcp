@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v4.1.2 (2026-10-08)
+
+### Bug Fixes
+
+- Run NSS all.sh from its own directory
+  ([`1d07c70`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/1d07c707c1ca19f028743f920e2b2a38c64ec84d))
+
+
 ## v4.1.1 (2026-10-08)
 
 ### Bug Fixes
