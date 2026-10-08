@@ -1,8 +1,8 @@
 """FastMCP server exposing all fx-audit-mcp execution tools.
 
-Serves browser_evaluator, package_testcase, js_shell_evaluator,
-js_shell_differential_evaluator, build_firefox, build_nss, and
-nss_gtest_evaluator over stdio.
+Serves browser_evaluator, android_browser_evaluator (Linux only),
+package_testcase, js_shell_evaluator, js_shell_differential_evaluator,
+build_firefox, build_nss, and nss_gtest_evaluator over stdio.
 
 Configuration is via environment variables:
   FIREFOX_SOURCE_ROOT    — default Firefox source directory for build tools
@@ -13,6 +13,10 @@ Configuration is via environment variables:
   FX_AUDIT_ENABLE_DIFFERENTIAL — when set to a non-empty value, register
                            js_shell_differential_evaluator; off by default,
                            so differential testing is opt-in per server
+  ANDROID_SERIAL         — device for android_browser_evaluator to use instead
+                           of the emulator it otherwise boots and manages
+  ANDROID_HOME / ANDROID_SDK_ROOT — Android SDK location (default ~/Android/Sdk);
+                           the emulator and system image are installed there
 """
 
 from __future__ import annotations
@@ -24,7 +28,11 @@ from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
-from .browser_evaluator import browser_evaluator, package_testcase
+from .browser_evaluator import (
+    android_browser_evaluator,
+    browser_evaluator,
+    package_testcase,
+)
 from .build_firefox import build_firefox
 from .build_nss import build_nss
 from .js_shell_differential_evaluator import js_shell_differential_evaluator
@@ -48,7 +56,8 @@ def create_server() -> FastMCP:
 
     The differential evaluator is only registered when DIFFERENTIAL_ENV is set
     to a non-empty value, so a caller that has not opted into differential
-    testing never shows the tool to its agent.
+    testing never shows the tool to its agent. The Android evaluator is only
+    registered on Linux, the one host grizzly's Android target supports.
     """
     server = FastMCP("fx-audit")
     tools: list[Callable[..., object]] = [
@@ -59,8 +68,10 @@ def create_server() -> FastMCP:
         build_nss,
         nss_gtest_evaluator,
     ]
+    if sys.platform == "linux":
+        tools.insert(1, android_browser_evaluator)
     if os.environ.get(DIFFERENTIAL_ENV):
-        tools.insert(2, js_shell_differential_evaluator)
+        tools.insert(-4, js_shell_differential_evaluator)
     for fn in tools:
         server.tool(fn)
     return server

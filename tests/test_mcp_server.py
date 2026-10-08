@@ -19,11 +19,22 @@ EXPECTED_TOOLS = {
 
 
 @pytest.mark.anyio
-async def test_all_tools_registered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """All unconditional tools are registered; the differential tool is not."""
+@pytest.mark.parametrize(
+    ("platform", "platform_tools"),
+    [
+        ("linux", {"android_browser_evaluator"}),
+        ("darwin", set()),
+        ("win32", set()),
+    ],
+)
+async def test_all_tools_registered(
+    monkeypatch: pytest.MonkeyPatch, platform: str, platform_tools: set[str]
+) -> None:
+    """Unconditional tools are registered, plus the Android tool on Linux only."""
     monkeypatch.delenv(DIFFERENTIAL_ENV, raising=False)
+    monkeypatch.setattr("sys.platform", platform)
     registered = {t.name for t in await create_server().list_tools()}
-    assert registered == EXPECTED_TOOLS
+    assert registered == EXPECTED_TOOLS | platform_tools
 
 
 @pytest.mark.anyio
@@ -32,6 +43,7 @@ async def test_differential_tool_registered_when_enabled(
 ) -> None:
     """DIFFERENTIAL_ENV set to a non-empty value registers the differential tool."""
     monkeypatch.setenv(DIFFERENTIAL_ENV, "1")
+    monkeypatch.setattr("sys.platform", "darwin")
     registered = {t.name for t in await create_server().list_tools()}
     assert registered == EXPECTED_TOOLS | {"js_shell_differential_evaluator"}
 

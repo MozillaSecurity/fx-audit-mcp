@@ -2,7 +2,11 @@
 
 __version__ = "0.1.0"
 
-from .browser_evaluator import browser_evaluator, package_testcase
+from .browser_evaluator import (
+    android_browser_evaluator,
+    browser_evaluator,
+    package_testcase,
+)
 from .build_firefox import build_firefox
 from .build_nss import build_nss
 from .js_shell_differential_evaluator import js_shell_differential_evaluator
@@ -10,6 +14,7 @@ from .js_shell_evaluator import js_shell_evaluator
 from .nss_gtest_evaluator import nss_gtest_evaluator
 
 __all__ = [
+    "android_browser_evaluator",
     "browser_evaluator",
     "build_firefox",
     "build_nss",

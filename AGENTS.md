@@ -10,7 +10,8 @@ with ASAN.
 src/fx_audit_mcp/          # Main package
   __init__.py                  # Public API re-exports
   models.py                    # Pydantic return types (BrowserCrashInfo, BuildResult, ...)
-  browser_evaluator.py         # Run testcase in ASAN Firefox via grizzly
+  android_emulator.py          # Process-wide Android emulator + APK install (fxpoppet)
+  browser_evaluator.py         # Run testcase in ASAN Firefox (desktop/Android) via grizzly
   js_shell_evaluator.py        # Run testcase in SpiderMonkey JS shell
   nss_gtest_evaluator.py       # Run NSS GTest under ASAN
   build_firefox.py             # Build Firefox with mach build
@@ -22,6 +23,7 @@ src/fx_audit_mcp/          # Main package
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
   conftest.py
+  test_android_emulator.py
   test_browser_evaluator.py
   test_build_firefox.py
   test_build_nss.py
@@ -85,10 +87,23 @@ tests/                         # Unit tests (mirrors src layout by tool file)
 - Long-running tools should stream subprocess output through `ctx` when a
   request context is available and capture the output for their return model;
   without a context, they should write output directly to stdout/stderr.
+- `android_browser_evaluator` runs the same grizzly replay as
+  `browser_evaluator` (shared `_replay_testcase`) through grizzly's
+  `FenixTarget`, on a device from `android_emulator.emulator_manager()`. That
+  `functools.cache`d manager owns one emulator per process, booted under Xvfb
+  on first use after `AndroidEmulator.install()` fetches the SDK. It is
+  relaunched when found dead or unresponsive, and stopped at exit via `atexit`.
+  The APK is reinstalled only when the file changed or is gone from the
+  device. `ANDROID_SERIAL` bypasses it: that device is used and never managed.
+  The device is held under a lock for the whole run, and a run the emulator
+  died under raises rather than returning a result. The tool is registered on
+  Linux only. fxpoppet's `log_logcat.txt` is routed to stdout, since anything
+  `_categorize_logs` doesn't recognize counts as crashdata.
 - `browser_evaluator` loads `ignored_signatures/*.json` (FuzzManager format) at
   call time to suppress common noise crashes (e.g. shutdown hangs).
-- The execution tools (browser/JS shell/NSS gtest/Firefox/NSS build) are also
-  exported from `fx_audit_mcp` for direct use (e.g. as pydantic-ai tools).
+- The execution tools (browser/Android browser/JS shell/NSS gtest/Firefox/NSS
+  build) are also exported from `fx_audit_mcp` for direct use (e.g. as
+  pydantic-ai tools).
 - Don't introduce thin private wrappers around a public function (or vice
   versa) when one call site does all the work — inline.
 

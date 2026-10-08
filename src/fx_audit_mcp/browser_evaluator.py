@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import sys
 import tempfile
+from contextlib import ExitStack
+from contextvars import ContextVar
 from logging import ERROR, getLogger
 from pathlib import Path
 from shutil import copytree
@@ -14,11 +17,13 @@ from typing import TYPE_CHECKING, Any
 from FTB.Signatures.CrashSignature import CrashSignature
 from grizzly.common.storage import TestCase
 from grizzly.replay.replay import ReplayManager
-from grizzly.target import TargetLaunchTimeout
+from grizzly.target import TargetLaunchError, TargetLaunchTimeout
+from grizzly.target.fenix_target import FenixTarget
 from grizzly.target.firefox_target import FirefoxTarget
 from prefpicker import PrefPicker
 from sapphire import Sapphire
 
+from .android_emulator import emulator_manager
 from .logs import LOG_DIR_PREFIX
 from .models import BrowserCrashInfo, CrashLogPaths
 
@@ -26,10 +31,18 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from grizzly.common.report import Report
+    from grizzly.replay.replay import ReplayResult
 
 
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
 PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
+MOZ_LOG = "console:5,PageMessages:5,ChildProcessLifecycle:5"
+# Android startup (emulator, GeckoView init) is far slower than desktop.
+ANDROID_LAUNCH_TIMEOUT = 180
+
+# Device serial handed to FenixTarget's device selection, which is a
+# staticmethod taking no arguments; set only while a target is being built.
+_FENIX_SERIAL: ContextVar[str] = ContextVar("_FENIX_SERIAL")
 
 # Idle detection is what separates a finished run from a hang once the time
 # limit expires: a browser under this CPU threshold stopped requesting files
@@ -54,6 +67,7 @@ _PTYPE_TO_FIELD_MAP: dict[str, str] = {
 # Suppress grizzly's verbose logging (but allow CRITICAL and ERROR)
 getLogger("grizzly").setLevel(ERROR)
 getLogger("ffpuppet").setLevel(ERROR)
+getLogger("fxpoppet").setLevel(ERROR)
 getLogger("sapphire").setLevel(ERROR)
 
 
@@ -96,6 +110,44 @@ class _FxAuditFirefoxTarget(FirefoxTarget):
         # Capture parent PID immediately after launch
         if hasattr(self, "_puppet"):
             self.parent_pid = self._puppet.get_pid()
+
+
+class _FxAuditFenixTarget(FenixTarget):
+    """Android target bound to a given device that records the parent PID."""
+
+    def __init__(self, serial: str, *args: Any, **kwargs: Any) -> None:
+        token = _FENIX_SERIAL.set(serial)
+        try:
+            super().__init__(*args, **kwargs)
+        finally:
+            _FENIX_SERIAL.reset(token)
+        self.parent_pid: int | None = None
+        # FenixTarget reports launch failures as TargetLaunchError, which
+        # carries its own report, so this stays None; _replay_testcase reads it
+        # on both targets.
+        self.launch_timeout_report: Report | None = None
+        # See _FxAuditFirefoxTarget.hang_detected.
+        self.hang_detected = False
+
+    @staticmethod
+    def _select_device() -> str:
+        # FenixTarget's own wants ANDROID_SERIAL or exactly one device attached.
+        return _FENIX_SERIAL.get()
+
+    def handle_hang(
+        self, ignore_idle: bool = True, ignore_timeout: bool = False
+    ) -> bool:
+        was_idle = super().handle_hang(
+            ignore_idle=ignore_idle, ignore_timeout=ignore_timeout
+        )
+        self.hang_detected = not was_idle
+        return was_idle
+
+    def launch(self, location: str) -> None:  # pragma: no cover
+        super().launch(location)
+        # FenixTarget.__init__ raises when the package name is unreadable.
+        assert self._package is not None
+        self.parent_pid = self._session.get_pid(self._package)
 
 
 def _scan_lines(log_paths: list[str]) -> Iterator[str]:
@@ -335,12 +387,244 @@ def _categorize_logs(log_dir: Path) -> CrashLogPaths:
         log_name = path.name.lower()
         if "stderr" in log_name:
             paths["stderr"].append(str(path))
-        elif "stdout" in log_name:
+        # fxpoppet's full device logcat is output, not a crash report.
+        elif "stdout" in log_name or "logcat" in log_name:
             paths["stdout"].append(str(path))
         else:
             paths["crashdata"].append(str(path))
 
     return CrashLogPaths(**paths)
+
+
+def _emulator_exited_error(log_dir: Path) -> RuntimeError:
+    """Build the error for a run the Android emulator died under."""
+    logs = f"; logs are in {log_dir}" if log_dir.exists() else ""
+    return RuntimeError(
+        "The Android emulator exited during the run and will be relaunched on "
+        f"the next call{logs}"
+    )
+
+
+def _launch_failure_result(
+    report_path: Path, log_dir: Path, parent_pid: int | None
+) -> BrowserCrashInfo | None:
+    """Copy a failed launch's report into *log_dir* and judge it a crash.
+
+    Args:
+        report_path: Directory of the report grizzly made for the launch.
+        log_dir: Directory the run's logs are returned in.
+        parent_pid: Browser parent PID, when the launch got far enough to have one.
+
+    Returns:
+        A crash result when the report holds crash diagnostics, otherwise None,
+        leaving the copied logs in *log_dir* for the caller's error.
+    """
+    copytree(report_path, log_dir, dirs_exist_ok=True)
+    log_paths = _categorize_logs(log_dir)
+    # A child process (content/GPU/etc.) can crash with ASAN while the parent
+    # stays alive and the bootstrap times out. Test file size rather than the
+    # crash PIDs: UBSAN reports carry no ==pid==ERROR: marker, so a PID scan
+    # would miss them here.
+    if any(Path(path).stat().st_size for path in log_paths.crashdata):
+        return BrowserCrashInfo(
+            crashed=True,
+            timed_out=False,
+            **_crashed_process_fields(log_paths, parent_pid),
+            logs=log_paths,
+        )
+    return None
+
+
+def _replay_testcase(
+    target: _FxAuditFirefoxTarget | _FxAuditFenixTarget,
+    testcase: TestCase,
+    timeout: int,
+    prefs: dict[str, str | int | bool] | None,
+    log_dir: Path,
+) -> BrowserCrashInfo:
+    """Run a testcase once in *target* and report the outcome.
+
+    Owns *target* and *log_dir* from here: the target is cleaned up on return,
+    and *log_dir* is removed if the run leaves it empty. The caller keeps
+    *testcase*, which it builds first so bad input fails before any browser or
+    device work.
+
+    Args:
+        target: Launched-on-demand browser target to run the testcase in.
+        testcase: Testcase to run, from ``_build_testcase``.
+        timeout: Run window in seconds.
+        prefs: Custom prefs layered on the prefpicker template.
+        log_dir: Fresh, empty directory to write the run's logs to.
+
+    Returns:
+        BrowserCrashInfo for the run.
+    """
+    results: list[ReplayResult] = []
+
+    def cleanup_reports() -> None:
+        for result_obj in results:
+            result_obj.report.cleanup()
+        if target.launch_timeout_report is not None:
+            target.launch_timeout_report.cleanup()
+
+    with ExitStack() as cleanup:
+        # Callbacks run in reverse order, and each still runs when an earlier
+        # one raises, e.g. target.cleanup() on a device that went away mid-run.
+        cleanup.callback(_remove_if_empty, log_dir)
+        cleanup.callback(cleanup_reports)
+        cleanup.callback(target.cleanup)
+
+        # Always generate prefs.js from the prefpicker template, plus any
+        # user-supplied custom prefs on top. These are set on the target
+        # profile (not the testcase) so they don't appear in testcase dump
+        # output.
+        with tempfile.TemporaryDirectory(prefix="fx_audit_prefs_") as prefs_dir:
+            prefs_path = Path(prefs_dir) / "prefs.js"
+            template = PrefPicker.lookup_template("browser-fuzzing.yml")
+            assert template is not None
+            PrefPicker.load_template(template).create_prefsjs(
+                prefs_path,
+                variant="code-review",
+                additional_prefs=prefs,
+            )
+            _check_pref_blocklist(prefs_path, _load_pref_blocklist())
+            target.asset_mgr.add("prefs", prefs_path)
+
+        # Process assets (prefs, etc.) - required for Firefox to launch properly
+        target.process_assets()
+
+        with Sapphire(auto_close=1, timeout=timeout) as server:
+            target.reverse(server.port, server.port)
+            with ReplayManager(
+                ignore=frozenset(),
+                server=server,
+                target=target,
+                ignore_signatures=_load_ignored_signatures(),
+                use_harness=False,
+            ) as replay:
+                try:
+                    results[:] = replay.run(
+                        testcases=[testcase],
+                        time_limit=timeout,
+                        expect_hang=False,
+                        idle_threshold=_IDLE_THRESHOLD,
+                        # Hold the first idle poll until the time limit is up.
+                        # Sapphire tests the idle callback before the deadline,
+                        # so polling any sooner ends the run at that poll
+                        # instead: a testcase that waits before triggering its
+                        # bug (a timer, a slow load) would be closed as a clean
+                        # run having never reached it, whatever the timeout.
+                        idle_delay=timeout,
+                    )
+                except TargetLaunchTimeout:
+                    if target.launch_timeout_report is None:
+                        raise TimeoutError(
+                            "Firefox failed to launch within the timeout"
+                        ) from None
+                    crash = _launch_failure_result(
+                        target.launch_timeout_report.path, log_dir, target.parent_pid
+                    )
+                    if crash is not None:
+                        return crash
+                    # The copied launch logs are the only diagnostics for this
+                    # failure; hand the caller their location, as with any
+                    # returned log dir, rather than stranding the directory.
+                    raise TimeoutError(
+                        "Firefox failed to launch within the timeout; "
+                        f"launch logs are in {log_dir}"
+                    ) from None
+                except TargetLaunchError as exc:
+                    # Raised with a report when the browser dies during startup,
+                    # which a testcase can cause as well as a broken build.
+                    cleanup.callback(exc.report.cleanup)
+                    crash = _launch_failure_result(
+                        exc.report.path, log_dir, target.parent_pid
+                    )
+                    if crash is not None:
+                        return crash
+                    raise RuntimeError(
+                        f"Firefox failed to launch: {exc}; launch logs are in {log_dir}"
+                    ) from None
+
+        if not results:
+            target.save_logs(log_dir)
+            return BrowserCrashInfo(
+                crashed=False,
+                # A hang that produced no report (idle hang, or any hang on
+                # non-Linux) still timed out; only the flag records it.
+                timed_out=target.hang_detected,
+                logs=_categorize_logs(log_dir),
+            )
+
+        result_obj = results[0]
+        # Copy before the finally block rmtree()s the report dir.
+        copytree(result_obj.report.path, log_dir, dirs_exist_ok=True)
+        log_paths = _categorize_logs(log_dir)
+        if result_obj.report.is_hang:
+            return BrowserCrashInfo(
+                crashed=False,
+                timed_out=True,
+                logs=log_paths,
+            )
+        return BrowserCrashInfo(
+            crashed=True,
+            timed_out=False,
+            **_crashed_process_fields(log_paths, target.parent_pid),
+            logs=log_paths,
+        )
+
+
+def _remove_if_empty(path: Path) -> None:
+    """Remove the directory *path* if the run left nothing in it."""
+    if not any(path.iterdir()):
+        path.rmdir()
+
+
+def _run_android(
+    file_paths: dict[str, Path],
+    entry_point: str,
+    apk: Path,
+    timeout: int,
+    prefs: dict[str, str | int | bool] | None,
+) -> BrowserCrashInfo:
+    """Synchronous body of ``android_browser_evaluator``.
+
+    Kept off the event loop by the tool: the first call alone downloads the
+    SDK and boots an emulator, which takes minutes.
+    """
+    if not apk.is_file():
+        raise FileNotFoundError(f"APK not found at {apk}")
+
+    # Before the device: bad input must not cost an emulator boot first.
+    testcase = _build_testcase(file_paths, entry_point)
+    try:
+        manager = emulator_manager()
+        with manager.device(apk) as serial:
+            target = _FxAuditFenixTarget(
+                serial,
+                binary=apk,
+                launch_timeout=ANDROID_LAUNCH_TIMEOUT,
+                log_limit=0,
+                memory_limit=0,
+                report_size_limit=0,
+            )
+            target.environ["MOZ_LOG"] = MOZ_LOG
+            log_dir = Path(tempfile.mkdtemp(prefix=LOG_DIR_PREFIX))
+            try:
+                result = _replay_testcase(target, testcase, timeout, prefs, log_dir)
+            except Exception as exc:
+                # A device lost mid-run mostly surfaces as an adb or launch
+                # error; name the real cause. Anything else propagates as-is.
+                if manager.emulator_exited():
+                    raise _emulator_exited_error(log_dir) from exc
+                raise
+            if manager.emulator_exited():
+                # Whatever the run reported, the device went away under it
+                # (e.g. the emulator was OOM-killed), so it can't be trusted.
+                raise _emulator_exited_error(log_dir)
+    finally:
+        testcase.cleanup()
+    return result
 
 
 async def package_testcase(
@@ -482,136 +766,93 @@ async def browser_evaluator(  # pragma: no cover
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
 
     testcase = _build_testcase(file_paths, entry_point)
-
-    # Use our custom target to capture parent PID
-    # xvfb is only available on Linux; use default display mode on other platforms
-    display_mode = "xvfb" if sys.platform == "linux" else "default"
-    target = _FxAuditFirefoxTarget(
-        binary=firefox_binary,
-        disable_sandboxing=not enable_sandbox,
-        display_mode=display_mode,
-        launch_timeout=30,
-        log_limit=0,
-        memory_limit=0,
-        report_size_limit=0,
-    )
-
-    # Enable verbose logging
-    target.environ["MOZ_LOG"] = "console:5,PageMessages:5,ChildProcessLifecycle:5"
-
-    # Minimize log spam from mesa
-    target.environ["EGL_LOG_LEVEL"] = "fatal"
-
-    # Always generate prefs.js from the prefpicker template, plus any
-    # user-supplied custom prefs on top. These are set on the target profile
-    # (not the testcase) so they don't appear in testcase dump output.
-    with tempfile.TemporaryDirectory(prefix="fx_audit_prefs_") as prefs_dir:
-        prefs_path = Path(prefs_dir) / "prefs.js"
-        template = PrefPicker.lookup_template("browser-fuzzing.yml")
-        assert template is not None
-        PrefPicker.load_template(template).create_prefsjs(
-            prefs_path,
-            variant="code-review",
-            additional_prefs=prefs,
-        )
-        _check_pref_blocklist(prefs_path, _load_pref_blocklist())
-        target.asset_mgr.add("prefs", prefs_path)
-
-    # Process assets (prefs, etc.) - required for Firefox to launch properly
-    target.process_assets()
-
-    # Removed below only if it ends up empty - otherwise the caller owns it.
-    log_dir = Path(tempfile.mkdtemp(prefix=LOG_DIR_PREFIX))
-
-    results = []
     try:
-        with Sapphire(auto_close=1, timeout=timeout) as server:
-            target.reverse(server.port, server.port)
-            with ReplayManager(
-                ignore=frozenset(),
-                server=server,
-                target=target,
-                ignore_signatures=_load_ignored_signatures(),
-                use_harness=False,
-            ) as replay:
-                try:
-                    results = replay.run(
-                        testcases=[testcase],
-                        time_limit=timeout,
-                        expect_hang=False,
-                        idle_threshold=_IDLE_THRESHOLD,
-                        # Hold the first idle poll until the time limit is up.
-                        # Sapphire tests the idle callback before the deadline,
-                        # so polling any sooner ends the run at that poll
-                        # instead: a testcase that waits before triggering its
-                        # bug (a timer, a slow load) would be closed as a clean
-                        # run having never reached it, whatever the timeout.
-                        idle_delay=timeout,
-                    )
-                except TargetLaunchTimeout:
-                    if target.launch_timeout_report is None:
-                        raise TimeoutError(
-                            "Firefox failed to launch within the timeout"
-                        ) from None
-                    copytree(
-                        target.launch_timeout_report.path,
-                        log_dir,
-                        dirs_exist_ok=True,
-                    )
-                    log_paths = _categorize_logs(log_dir)
-                    # A child process (content/GPU/etc.) can crash with ASAN
-                    # while the parent stays alive and the bootstrap times out.
-                    # Test file size rather than the crash PIDs: UBSAN reports
-                    # carry no ==pid==ERROR: marker, so a PID scan would miss
-                    # them here.
-                    if any(Path(path).stat().st_size for path in log_paths.crashdata):
-                        return BrowserCrashInfo(
-                            crashed=True,
-                            timed_out=False,
-                            **_crashed_process_fields(log_paths, target.parent_pid),
-                            logs=log_paths,
-                        )
-                    # The copied launch logs are the only diagnostics for this
-                    # failure; hand the caller their location, as with any
-                    # returned log dir, rather than stranding the directory.
-                    raise TimeoutError(
-                        "Firefox failed to launch within the timeout; "
-                        f"launch logs are in {log_dir}"
-                    ) from None
-
-        if not results:
-            target.save_logs(log_dir)
-            return BrowserCrashInfo(
-                crashed=False,
-                # A hang that produced no report (idle hang, or any hang on
-                # non-Linux) still timed out; only the flag records it.
-                timed_out=target.hang_detected,
-                logs=_categorize_logs(log_dir),
-            )
-
-        result_obj = results[0]
-        # Copy before the finally block rmtree()s the report dir.
-        copytree(result_obj.report.path, log_dir, dirs_exist_ok=True)
-        log_paths = _categorize_logs(log_dir)
-        if result_obj.report.is_hang:
-            return BrowserCrashInfo(
-                crashed=False,
-                timed_out=True,
-                logs=log_paths,
-            )
-        return BrowserCrashInfo(
-            crashed=True,
-            timed_out=False,
-            **_crashed_process_fields(log_paths, target.parent_pid),
-            logs=log_paths,
+        # Use our custom target to capture parent PID
+        # xvfb is only available on Linux; use default display mode on other
+        # platforms
+        display_mode = "xvfb" if sys.platform == "linux" else "default"
+        target = _FxAuditFirefoxTarget(
+            binary=firefox_binary,
+            disable_sandboxing=not enable_sandbox,
+            display_mode=display_mode,
+            launch_timeout=30,
+            log_limit=0,
+            memory_limit=0,
+            report_size_limit=0,
         )
 
+        # Enable verbose logging
+        target.environ["MOZ_LOG"] = MOZ_LOG
+
+        # Minimize log spam from mesa
+        target.environ["EGL_LOG_LEVEL"] = "fatal"
+
+        return _replay_testcase(
+            target,
+            testcase,
+            timeout,
+            prefs,
+            Path(tempfile.mkdtemp(prefix=LOG_DIR_PREFIX)),
+        )
     finally:
         testcase.cleanup()
-        if target.launch_timeout_report is not None:
-            target.launch_timeout_report.cleanup()
-        target.cleanup()
-        for result_obj in results:
-            result_obj.report.cleanup()
-        if not any(log_dir.iterdir()):
-            log_dir.rmdir()
+
+
+async def android_browser_evaluator(  # pragma: no cover
+    file_paths: dict[str, Path],
+    entry_point: str,
+    apk: Path,
+    timeout: int = 30,
+    prefs: dict[str, str | int | bool] | None = None,
+) -> BrowserCrashInfo:
+    """Reproduce a Firefox for Android crash by running an HTML/JS testcase in
+    an Android emulator and reporting any crash detected.
+
+    Linux only. The APK must be a Fenix or GeckoView example build (e.g. from
+    ``fuzzfetch --os Android --cpu x86_64``); crash symbols are read from
+    ``symbols/`` next to it, and an ``llvm-symbolizer`` next to it is installed
+    on the device for ASAN builds.
+
+    The device is managed for you. The first call downloads the Android SDK,
+    emulator and system image if they are missing and boots an emulator under
+    Xvfb, which takes minutes; later calls reuse it, and reinstall the APK only
+    when it changed. A crashed or unresponsive emulator is relaunched on the
+    next call. Set ``ANDROID_SERIAL`` to use an already-running device instead;
+    it is never launched or killed. Calls are serialized on the one device.
+
+    Testcases are served over HTTP through ``adb reverse``, the device is in
+    airplane mode, and MOZ_LOG=console:5,PageMessages:5,ChildProcessLifecycle:5
+    is set on the browser. Prefs, the ``FIREFOX_PREF_BLOCKLIST`` check and
+    ignored signatures behave as in ``browser_evaluator``.
+
+    Logs are written to a temporary directory. The caller is responsible for
+    cleanup. ``log_logcat.txt`` (the full device logcat) is listed with stdout.
+
+    Args:
+        file_paths: Testcase files, as a mapping of the name each file should
+            have in the testcase to its path on disk. Use forward slashes for
+            subdirectories (e.g. ``sub/frame.html``). Source files are copied,
+            not moved. Binary files (images, fonts, media) are supported. A
+            name escaping the testcase root raises ValueError; a missing
+            source file raises FileNotFoundError.
+        entry_point: Filename within ``file_paths`` that the browser loads
+            first; must be present in ``file_paths``.
+        apk: Absolute path to the Firefox for Android APK.
+        timeout: Run window in seconds; the browser is closed when it expires.
+            Raise it for testcases that need more time to reach the
+            vulnerable code.
+        prefs: Optional custom Firefox prefs to layer on top of the prefpicker
+            template.
+
+    Returns:
+        BrowserCrashInfo with:
+        - crashed: Boolean indicating if the testcase triggered a crash.
+        - timed_out: Boolean indicating if the testcase timed out.
+        - crashed_parent, crashed_content, crashed_gpu, crashed_rdd,
+          crashed_gmp, crashed_socket, crashed_utility: which process type the
+          crash was attributed to; None when attribution was unavailable.
+        - logs: Paths to the run's stderr/stdout/crashdata log files.
+    """
+    return await asyncio.to_thread(
+        _run_android, file_paths, entry_point, apk, timeout, prefs
+    )

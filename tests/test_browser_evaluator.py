@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -11,7 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 from grizzly.common import storage as grizzly_storage
 from grizzly.common import utils as grizzly_utils
-from grizzly.target import TargetLaunchTimeout
+from grizzly.target import TargetLaunchError, TargetLaunchTimeout
+from grizzly.target.fenix_target import FenixTarget
 from grizzly.target.firefox_target import FirefoxTarget
 from pytest_mock import MockerFixture
 
@@ -23,9 +25,11 @@ from fx_audit_mcp.browser_evaluator import (
     _crashed_process_fields,
     _extract_child_ptypes,
     _extract_crash_pids,
+    _FxAuditFenixTarget,
     _FxAuditFirefoxTarget,
     _load_ignored_signatures,
     _load_pref_blocklist,
+    android_browser_evaluator,
     browser_evaluator,
     package_testcase,
 )
@@ -90,12 +94,17 @@ class TestCategorizeLogs:
         )
 
     def test_routes_by_filename(self, tmp_path: Path) -> None:
-        """Route log files to stderr, stdout, or crashdata based on filename."""
-        for name in ("log_stderr.txt", "log_stdout.txt", "log_asan.txt"):
+        """Route log files to stderr, stdout, or crashdata based on filename.
+
+        fxpoppet's full device logcat is output, not crashdata, or every
+        Android run would look like a crash.
+        """
+        names = ("log_stderr.txt", "log_stdout.txt", "log_logcat.txt", "log_asan.txt")
+        for name in names:
             (tmp_path / name).write_text(name)
         assert _categorize_logs(tmp_path) == CrashLogPaths(
             stderr=[str(tmp_path / "log_stderr.txt")],
-            stdout=[str(tmp_path / "log_stdout.txt")],
+            stdout=[str(tmp_path / "log_logcat.txt"), str(tmp_path / "log_stdout.txt")],
             crashdata=[str(tmp_path / "log_asan.txt")],
         )
 
@@ -131,15 +140,20 @@ def test_target_supports_report_size_limit() -> None:
 
 
 @pytest.mark.parametrize("was_idle", [True, False])
+@pytest.mark.parametrize(
+    ("target_cls", "base_cls"),
+    [(_FxAuditFirefoxTarget, FirefoxTarget), (_FxAuditFenixTarget, FenixTarget)],
+)
 def test_hang_flag_records_only_a_busy_hang(
-    mocker: MockerFixture, was_idle: bool
+    mocker: MockerFixture,
+    was_idle: bool,
+    target_cls: type[_FxAuditFirefoxTarget | _FxAuditFenixTarget],
+    base_cls: type[FirefoxTarget | FenixTarget],
 ) -> None:
     """The hang flag follows the browser's CPU state, not the time limit."""
-    target = _FxAuditFirefoxTarget.__new__(_FxAuditFirefoxTarget)
+    target = target_cls.__new__(target_cls)
     target.hang_detected = False
-    handle_hang = mocker.patch.object(
-        FirefoxTarget, "handle_hang", return_value=was_idle
-    )
+    handle_hang = mocker.patch.object(base_cls, "handle_hang", return_value=was_idle)
 
     assert target.handle_hang(ignore_timeout=True) is was_idle
 
@@ -427,6 +441,27 @@ class TestPackageTestcase:
         assert "browser.backup.enabled" in prefs_content
 
 
+def test_fenix_target_selects_the_given_device(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """The target connects to the serial it was built with, not ANDROID_SERIAL."""
+    fenix_module = sys.modules["grizzly.target.fenix_target"]
+    session_cls = mocker.patch.object(fenix_module, "ADBSession")
+    session_cls.get_package_name.return_value = "org.mozilla.fenix"
+    mocker.patch.object(fenix_module, "ADBProcess")
+    mocker.patch.dict(os.environ, {"ANDROID_SERIAL": "R5CT1234"})
+
+    _FxAuditFenixTarget(
+        "emulator-5556",
+        binary=tmp_path / "target.apk",
+        launch_timeout=1,
+        log_limit=0,
+        memory_limit=0,
+    )
+
+    assert session_cls.connect.call_args.args == ("emulator-5556",)
+
+
 class TestBrowserEvaluator:
     @pytest.mark.anyio
     async def test_missing_firefox_binary(
@@ -508,6 +543,83 @@ class TestBrowserEvaluator:
         (log_dir,) = temp_root.glob(f"{LOG_DIR_PREFIX}*")
         assert str(log_dir) in str(excinfo.value)
         assert (log_dir / "log_stderr.txt").read_text() == "launch diagnostics"
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("crashdata", ["", "==1234==ERROR: AddressSanitizer\n"])
+    async def test_launch_error_report_is_judged_for_a_crash(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mocker: MockerFixture,
+        crashdata: str,
+    ) -> None:
+        """A startup crash is a crash result; other launch failures name their logs."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+
+        report = mocker.MagicMock()
+        report.path = tmp_path / "report"
+        report.path.mkdir()
+        (report.path / "log_stderr.txt").write_text("launch diagnostics")
+        (report.path / "log_ffp_asan_1234.txt").write_text(crashdata)
+
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        target.parent_pid = None
+        mocker.patch.object(be_module, "_FxAuditFirefoxTarget", return_value=target)
+        mocker.patch.object(be_module, "Sapphire")
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.side_effect = TargetLaunchError(
+            "startup failed", report
+        )
+
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        evaluation = browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            firefox_binary=firefox_binary,
+        )
+        if crashdata:
+            result = await evaluation
+            assert result.crashed is True
+            assert result.timed_out is False
+        else:
+            with pytest.raises(RuntimeError, match="failed to launch") as excinfo:
+                await evaluation
+            (log_dir,) = temp_root.glob(f"{LOG_DIR_PREFIX}*")
+            assert str(log_dir) in str(excinfo.value)
+        report.cleanup.assert_called_once_with()
+
+    @pytest.mark.anyio
+    async def test_cleanup_continues_past_a_failing_target_cleanup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        """A target that fails to clean up still lets the other cleanups run."""
+        firefox_binary = tmp_path / "firefox"
+        firefox_binary.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        target = self._mock_replay(mocker, tmp_path, is_hang=False, report_files={})
+        target.cleanup.side_effect = RuntimeError("device gone")
+        result = be_module.ReplayManager.return_value.__enter__.return_value.run
+        report = result.return_value[0].report
+
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        with pytest.raises(RuntimeError, match="device gone"):
+            await browser_evaluator(
+                file_paths={"test.html": testcase_file},
+                entry_point="test.html",
+                firefox_binary=firefox_binary,
+            )
+
+        report.cleanup.assert_called_once_with()
+        assert not list(temp_root.glob(f"{LOG_DIR_PREFIX}*"))
 
     @staticmethod
     def _mock_replay(
@@ -651,6 +763,152 @@ class TestBrowserEvaluator:
         assert result.crashed_parent is True
         assert result.logs.crashdata
         assert "asan" in Path(result.logs.crashdata[0]).name
+
+
+class TestAndroidBrowserEvaluator:
+    @staticmethod
+    def _mock_device(mocker: MockerFixture, *, exited: bool = False) -> MagicMock:
+        """Stub the emulator manager to hand out one device."""
+        manager: MagicMock = mocker.patch.object(be_module, "emulator_manager")
+        device = manager.return_value.device
+        device.return_value.__enter__.return_value = "emulator-5556"
+        manager.return_value.emulator_exited.return_value = exited
+        return device
+
+    @staticmethod
+    def _mock_replay(mocker: MockerFixture, report_dir: Path) -> MagicMock:
+        """Stub grizzly so replay yields one crash result from *report_dir*."""
+        target = mocker.MagicMock()
+        target.launch_timeout_report = None
+        target.parent_pid = 1234
+        target_cls: MagicMock = mocker.patch.object(
+            be_module, "_FxAuditFenixTarget", return_value=target
+        )
+        mocker.patch.object(be_module, "Sapphire")
+        result = mocker.MagicMock()
+        result.report.path = report_dir
+        result.report.is_hang = False
+        replay = mocker.patch.object(be_module, "ReplayManager").return_value
+        replay.__enter__.return_value.run.return_value = [result]
+        return target_cls
+
+    @pytest.mark.anyio
+    async def test_missing_apk(self, tmp_path: Path, mocker: MockerFixture) -> None:
+        """A missing APK raises before a device is booted or claimed."""
+        device = self._mock_device(mocker)
+        with pytest.raises(FileNotFoundError, match="APK not found"):
+            await android_browser_evaluator(
+                file_paths={"test.html": tmp_path / "test.html"},
+                entry_point="test.html",
+                apk=tmp_path / "target.apk",
+            )
+        device.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_bad_testcase_fails_before_the_device(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """Testcase errors raise before an emulator is booted or claimed."""
+        apk = tmp_path / "target.apk"
+        apk.touch()
+        (tmp_path / "a.html").write_text("<html></html>")
+        device = self._mock_device(mocker)
+        with pytest.raises(ValueError, match="entry_point"):
+            await android_browser_evaluator(
+                file_paths={"a.html": tmp_path / "a.html"},
+                entry_point="missing.html",
+                apk=apk,
+            )
+        device.assert_not_called()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("exited", [True, False])
+    async def test_run_error_names_a_dead_emulator(
+        self, tmp_path: Path, mocker: MockerFixture, exited: bool
+    ) -> None:
+        """A run error is reported as emulator death only if the emulator died."""
+        apk = tmp_path / "target.apk"
+        apk.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        self._mock_device(mocker, exited=exited)
+        self._mock_replay(mocker, report_dir)
+        original = RuntimeError("Device not available")
+        replay = be_module.ReplayManager.return_value
+        replay.__enter__.return_value.run.side_effect = original
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await android_browser_evaluator(
+                file_paths={"test.html": testcase_file},
+                entry_point="test.html",
+                apk=apk,
+            )
+
+        if exited:
+            assert "emulator exited" in str(excinfo.value)
+            assert excinfo.value.__cause__ is original
+        else:
+            assert excinfo.value is original
+
+    @pytest.mark.anyio
+    async def test_crash_runs_on_the_held_device(
+        self, tmp_path: Path, mocker: MockerFixture
+    ) -> None:
+        """The target is bound to the managed device and a crash is reported."""
+        apk = tmp_path / "target.apk"
+        apk.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        (report_dir / "log_logcat.txt").write_text("device noise\n")
+        (report_dir / "log_asan.txt").write_text(
+            "==1234==ERROR: AddressSanitizer: heap-use-after-free\n"
+        )
+        device = self._mock_device(mocker)
+        target_cls = self._mock_replay(mocker, report_dir)
+
+        result = await android_browser_evaluator(
+            file_paths={"test.html": testcase_file},
+            entry_point="test.html",
+            apk=apk,
+        )
+
+        device.assert_called_once_with(apk)
+        assert target_cls.call_args.args == ("emulator-5556",)
+        assert target_cls.call_args.kwargs["binary"] == apk
+        assert result.crashed is True
+        assert result.crashed_parent is True
+        assert [Path(p).name for p in result.logs.crashdata] == ["log_asan.txt"]
+
+    @pytest.mark.anyio
+    async def test_emulator_exit_during_run_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    ) -> None:
+        """A run the emulator died under is an error that names its logs."""
+        apk = tmp_path / "target.apk"
+        apk.touch()
+        testcase_file = tmp_path / "test.html"
+        testcase_file.write_text("<html></html>")
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        (report_dir / "log_stderr.txt").write_text("partial\n")
+        self._mock_device(mocker, exited=True)
+        self._mock_replay(mocker, report_dir)
+
+        temp_root = tmp_path / "tmp"
+        temp_root.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+        with pytest.raises(RuntimeError, match="emulator exited") as excinfo:
+            await android_browser_evaluator(
+                file_paths={"test.html": testcase_file},
+                entry_point="test.html",
+                apk=apk,
+            )
+        (log_dir,) = temp_root.glob(f"{LOG_DIR_PREFIX}*")
+        assert str(log_dir) in str(excinfo.value)
 
 
 class TestExtractChildPtypes:
@@ -834,3 +1092,22 @@ class TestIgnoredSignatures:
         monkeypatch.setattr(be_module, "IGNORED_SIGNATURES_DIR", sig_dir)
         sigs = _load_ignored_signatures()
         assert len(sigs) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+@pytest.mark.skipif(
+    "FX_AUDIT_TEST_APK" not in os.environ, reason="FX_AUDIT_TEST_APK not set"
+)
+async def test_android_browser_evaluator_runs_a_testcase(tmp_path: Path) -> None:
+    """A benign testcase runs to completion on a real emulator without crashing."""
+    testcase_file = tmp_path / "test.html"
+    testcase_file.write_text("<html><script>window.close()</script></html>")
+
+    result = await android_browser_evaluator(
+        file_paths={"test.html": testcase_file},
+        entry_point="test.html",
+        apk=Path(os.environ["FX_AUDIT_TEST_APK"]),
+    )
+
+    assert result.crashed is False
