@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v4.1.1 (2026-10-08)
+
+### Bug Fixes
+
+- Use ASAN_OPTIONS=handle_abort=1 for NSS
+  ([`9e17a11`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/9e17a113384e755fd926f573fc17441db704fd0f))
+
+
 ## v4.1.0 (2026-10-08)
 
 ### Features
