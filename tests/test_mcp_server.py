@@ -6,13 +6,12 @@ import pytest
 from pytest_mock import MockerFixture
 
 from fx_audit_mcp.browser_evaluator import browser_evaluator
-from fx_audit_mcp.mcp_server import main, mcp
+from fx_audit_mcp.mcp_server import DIFFERENTIAL_ENV, create_server, main, mcp
 
 EXPECTED_TOOLS = {
     "browser_evaluator",
     "package_testcase",
     "js_shell_evaluator",
-    "js_shell_differential_evaluator",
     "build_firefox",
     "build_nss",
     "nss_gtest_evaluator",
@@ -20,10 +19,21 @@ EXPECTED_TOOLS = {
 
 
 @pytest.mark.anyio
-async def test_all_tools_registered() -> None:
-    """All execution tools are registered on the mcp instance."""
-    registered = {t.name for t in await mcp.list_tools()}
+async def test_all_tools_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All unconditional tools are registered; the differential tool is not."""
+    monkeypatch.delenv(DIFFERENTIAL_ENV, raising=False)
+    registered = {t.name for t in await create_server().list_tools()}
     assert registered == EXPECTED_TOOLS
+
+
+@pytest.mark.anyio
+async def test_differential_tool_registered_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DIFFERENTIAL_ENV set to a non-empty value registers the differential tool."""
+    monkeypatch.setenv(DIFFERENTIAL_ENV, "1")
+    registered = {t.name for t in await create_server().list_tools()}
+    assert registered == EXPECTED_TOOLS | {"js_shell_differential_evaluator"}
 
 
 class TestBrowserEvaluatorSchema:
