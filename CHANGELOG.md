@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v4.1.0 (2026-10-08)
+
+### Features
+
+- Add a JS shell differential evaluator
+  ([#31](https://github.com/MozillaSecurity/fx-audit-mcp/pull/31),
+  [`c137a5b`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/c137a5bb93269b24a0d20d7db2b27a2e6018cbd5))
+
+- Gate JS shell different evaluator behind env var
+  ([#31](https://github.com/MozillaSecurity/fx-audit-mcp/pull/31),
+  [`c137a5b`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/c137a5bb93269b24a0d20d7db2b27a2e6018cbd5))
+
+
 ## v4.0.0 (2026-09-03)
 
 ### Bug Fixes
