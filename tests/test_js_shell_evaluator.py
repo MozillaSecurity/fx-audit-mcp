@@ -233,3 +233,34 @@ async def test_flags_and_timeout_are_passed_through(
 async def test_missing_js_binary_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="not found"):
         await js_shell_evaluator("x", tmp_path / "missing")
+
+
+@pytest.mark.anyio
+async def test_asan_options_reach_the_shell_environment(
+    mocker: MockerFixture,
+    make_run_result: MakeRunResult,
+    js_binary: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowed options are merged over the inherited ASAN_OPTIONS for the run."""
+    monkeypatch.setenv("ASAN_OPTIONS", "detect_leaks=0")
+    run = mocker.patch(RUN, AsyncMock(return_value=make_run_result()))
+
+    await js_shell_evaluator("x", js_binary, asan_options={"quarantine_size_mb": 0})
+
+    extra_env = run.call_args.kwargs["extra_env"]
+    assert set(extra_env["ASAN_OPTIONS"].split(":")) == {
+        "detect_leaks=0",
+        "quarantine_size_mb=0",
+    }
+
+
+@pytest.mark.anyio
+async def test_disallowed_asan_option_is_refused_before_running(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """A reporting option never starts the shell."""
+    run = mocker.patch(RUN, AsyncMock(return_value=make_run_result()))
+    with pytest.raises(ValueError, match="not allowed"):
+        await js_shell_evaluator("x", js_binary, asan_options={"halt_on_error": 0})
+    run.assert_not_called()
