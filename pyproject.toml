@@ -41,6 +41,7 @@ dev = [
 [project.scripts]
 fx-audit-mcp = "fx_audit_mcp.mcp_server:main"
 fx-audit-build-firefox = "fx_audit_mcp.build_firefox:main"
+fx-audit-android-emulator = "fx_audit_mcp.android_emulator:main"
 fx-audit-asan-symbolize = "fx_audit_mcp.asan_symbolize:main"
 
 [project.urls]
