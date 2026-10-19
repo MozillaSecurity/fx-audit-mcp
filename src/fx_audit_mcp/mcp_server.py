@@ -13,6 +13,9 @@ Configuration is via environment variables:
   FX_AUDIT_ENABLE_DIFFERENTIAL — when set to a non-empty value, register
                            js_shell_differential_evaluator; off by default,
                            so differential testing is opt-in per server
+  FIREFOX_APK            — path to a GeckoView APK; when set, register
+                           android_browser_evaluator, which runs testcases on
+                           the Android emulator named by ANDROID_SERIAL
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
+from .android_browser_evaluator import APK_ENV, android_browser_evaluator
 from .browser_evaluator import browser_evaluator, package_testcase
 from .build_firefox import build_firefox
 from .build_nss import build_nss
@@ -61,6 +65,8 @@ def create_server() -> FastMCP:
     ]
     if os.environ.get(DIFFERENTIAL_ENV):
         tools.insert(2, js_shell_differential_evaluator)
+    if os.environ.get(APK_ENV):
+        tools.insert(1, android_browser_evaluator)
     for fn in tools:
         server.tool(fn)
     return server

@@ -5,6 +5,7 @@ import inspect
 import pytest
 from pytest_mock import MockerFixture
 
+from fx_audit_mcp.android_browser_evaluator import APK_ENV
 from fx_audit_mcp.browser_evaluator import browser_evaluator
 from fx_audit_mcp.mcp_server import DIFFERENTIAL_ENV, create_server, main, mcp
 
@@ -20,8 +21,9 @@ EXPECTED_TOOLS = {
 
 @pytest.mark.anyio
 async def test_all_tools_registered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """All unconditional tools are registered; the differential tool is not."""
+    """All unconditional tools are registered; the opt-in tools are not."""
     monkeypatch.delenv(DIFFERENTIAL_ENV, raising=False)
+    monkeypatch.delenv(APK_ENV, raising=False)
     registered = {t.name for t in await create_server().list_tools()}
     assert registered == EXPECTED_TOOLS
 
@@ -32,8 +34,20 @@ async def test_differential_tool_registered_when_enabled(
 ) -> None:
     """DIFFERENTIAL_ENV set to a non-empty value registers the differential tool."""
     monkeypatch.setenv(DIFFERENTIAL_ENV, "1")
+    monkeypatch.delenv(APK_ENV, raising=False)
     registered = {t.name for t in await create_server().list_tools()}
     assert registered == EXPECTED_TOOLS | {"js_shell_differential_evaluator"}
+
+
+@pytest.mark.anyio
+async def test_android_tool_registered_with_apk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FIREFOX_APK set registers the Android evaluator."""
+    monkeypatch.delenv(DIFFERENTIAL_ENV, raising=False)
+    monkeypatch.setenv(APK_ENV, "/builds/geckoview_example.apk")
+    registered = {t.name for t in await create_server().list_tools()}
+    assert registered == EXPECTED_TOOLS | {"android_browser_evaluator"}
 
 
 class TestBrowserEvaluatorSchema:

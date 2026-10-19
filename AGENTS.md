@@ -11,6 +11,9 @@ src/fx_audit_mcp/          # Main package
   __init__.py                  # Public API re-exports
   models.py                    # Pydantic return types (BrowserCrashInfo, BuildResult, ...)
   browser_evaluator.py         # Run testcase in ASAN Firefox via grizzly
+  android_browser_evaluator.py # Run testcase in ASAN GeckoView on an Android emulator via grizzly + fxpoppet
+  asan_symbolize.py            # Symbolize Android ASAN reports on the host (Breakpad .sym or llvm-symbolizer)
+  android_emulator.py          # CLI: boot/stop headless emulators, one per agent
   js_shell_evaluator.py        # Run testcase in SpiderMonkey JS shell
   nss_gtest_evaluator.py       # Run NSS GTest under ASAN
   build_firefox.py             # Build Firefox with mach build
@@ -22,6 +25,10 @@ src/fx_audit_mcp/          # Main package
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
   conftest.py
+  fixtures/                    # Real Android ASAN report + a matching Breakpad .sym
+  test_android_browser_evaluator.py
+  test_android_emulator.py
+  test_asan_symbolize.py
   test_browser_evaluator.py
   test_build_firefox.py
   test_build_nss.py
@@ -87,6 +94,21 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   without a context, they should write output directly to stdout/stderr.
 - `browser_evaluator` loads `ignored_signatures/*.json` (FuzzManager format) at
   call time to suppress common noise crashes (e.g. shutdown hangs).
+- `android_browser_evaluator` is the same replay loop over grizzly's
+  `FenixTarget` (fxpoppet) and reuses `browser_evaluator`'s testcase, prefs
+  and crash-attribution helpers; only log categorization differs (fxpoppet's
+  raw `log_logcat.txt` goes with stdout, `log_asan.txt`/`log_minidump_*.txt`
+  are crashdata). The emulator is never started by the tool: it must be
+  running, and the device is chosen by `device_serial`, `ANDROID_SERIAL`, or
+  being the only one. Each evaluation holds a flock on a per-serial file so
+  two processes cannot drive one device; several agents on one machine each
+  get their own emulator from `fx-audit-android-emulator start --count N`
+  (all instances `-read-only`, so they can share the AVD). The APK is
+  installed only when its sha256 differs from the one recorded on the device.
+  Device-side ASAN frames carry no symbols, so crashdata is symbolized on the
+  host (`asan_symbolize`) before the result is returned, choosing the Breakpad
+  `.sym` whose debug id matches the frame's BuildId; symbolized frames keep
+  ASan's `#N 0xADDR in FUNCTION LOCATION` shape so FuzzManager parses them.
 - The execution tools (browser/JS shell/NSS gtest/Firefox/NSS build) are also
   exported from `fx_audit_mcp` for direct use (e.g. as pydantic-ai tools).
 - Don't introduce thin private wrappers around a public function (or vice
@@ -94,8 +116,10 @@ tests/                         # Unit tests (mirrors src layout by tool file)
 
 ## Entry Points
 
-- `fx-audit-mcp` → `fx_audit_mcp.mcp_server:main` (main MCP server: browser/JS shell/NSS/build tools)
+- `fx-audit-mcp` → `fx_audit_mcp.mcp_server:main` (main MCP server: browser/JS shell/NSS/build tools; Android tool when `FIREFOX_APK` is set)
 - `fx-audit-build-firefox` → `fx_audit_mcp.build_firefox:main` (CLI for building Firefox)
+- `fx-audit-asan-symbolize` → `fx_audit_mcp.asan_symbolize:main` (CLI: symbolize Android ASAN reports)
+- `fx-audit-android-emulator` → `fx_audit_mcp.android_emulator:main` (CLI: start/stop/list headless emulators)
 
 ## Development
 

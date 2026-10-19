@@ -77,6 +77,10 @@ class BrowserCrashInfo(ToolModel):
     crashed_utility: bool | None = None
     """True if the crash occurred in a utility process."""
 
+    device_serial: str | None = None
+    """adb serial of the Android device the testcase ran on; None for desktop
+    runs."""
+
 
 class JSShellCrashInfo(ToolModel):
     """Result of running a testcase under the SpiderMonkey JS shell."""

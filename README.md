@@ -10,6 +10,7 @@ Pydantic return types suitable for use with LLM agent frameworks.
 | Tool | Description |
 |------|-------------|
 | `browser_evaluator` | Run a multi-file testcase in ASAN Firefox via grizzly replay, detect crashes |
+| `android_browser_evaluator` | Run a testcase in an ASAN GeckoView app (geckoview_example/Fenix) on a running Android emulator via grizzly + fxpoppet, symbolize the ASAN report on the host |
 | `package_testcase` | Bundle a testcase directory with prefs and env into a grizzly TestCase |
 | `js_shell_evaluator` | Run a JS testcase in the SpiderMonkey shell, detect crashes and sanitizer output |
 | `nss_gtest_evaluator` | Run an NSS GTest and report any ASan crash |
@@ -120,6 +121,38 @@ agent = Agent(
 )
 ```
 
+### Firefox on Android
+
+`android_browser_evaluator` runs the testcase in an ASAN-instrumented GeckoView
+app (`geckoview_example` or Fenix, debuggable, with `wrap.sh`) on an Android
+emulator, through grizzly's `FenixTarget` and fxpoppet. It needs the Android
+SDK (`adb` and `aapt` on `PATH`), a booted emulator with KVM, and the APK.
+Setting `FIREFOX_APK` registers the tool on the MCP server.
+
+Several agents can share one machine by giving each its own emulator: every
+instance boots the same AVD read-only on its own console port and the evaluator
+locks the device it uses, so a second evaluator pointed at a busy device fails
+fast instead of corrupting both runs.
+
+```bash
+# one emulator per agent; prints emulator-5554, emulator-5556, ...
+fx-audit-android-emulator start --count 2
+ANDROID_SERIAL=emulator-5554 FIREFOX_APK=/builds/geckoview_example.apk fx-audit-mcp
+ANDROID_SERIAL=emulator-5556 FIREFOX_APK=/builds/geckoview_example.apk fx-audit-mcp
+fx-audit-android-emulator stop
+```
+
+ASAN frames from the device only name a library and offset; the report in
+`crashdata` (`log_asan.txt`) is symbolized on the host before it is returned.
+Symbols come from the build's Breakpad archive (`target.crashreporter-symbols.zip`
+unpacked to `symbols/` next to the APK, or `ANDROID_SYMBOLS_DIR`), matched to
+each frame's BuildId, or from unstripped libraries (`ANDROID_UNSTRIPPED_LIB_DIR`,
+e.g. a local objdir's `dist/bin`). The same logic is available standalone:
+
+```bash
+fx-audit-asan-symbolize --symbols /builds/symbols logcat.txt
+```
+
 ## Environment Variables
 
 | Variable | Used by | Description |
@@ -127,6 +160,12 @@ agent = Agent(
 | `BUGZILLA_API_KEY` | `fx-audit-bugzilla-mcp` | Required; your Bugzilla API key |
 | `BUGZILLA_URL` | `fx-audit-bugzilla-mcp` | Bugzilla REST base URL (default: Mozilla's) |
 | `FIREFOX_SOURCE_ROOT` | `fx-audit-build-firefox` | Default `--firefox-dir` for the CLI entry point |
+| `FIREFOX_APK` | `fx-audit-mcp` | GeckoView APK; registers `android_browser_evaluator` and is its default APK |
+| `ANDROID_SERIAL` | `android_browser_evaluator` | adb serial of the emulator this server drives (one per agent) |
+| `ANDROID_SYMBOLS_DIR` | `android_browser_evaluator` | Unpacked Breakpad symbols for the APK (default: `symbols/` beside it) |
+| `ANDROID_UNSTRIPPED_LIB_DIR` | `android_browser_evaluator` | Unstripped libraries matching the APK, resolved with `llvm-symbolizer` |
+| `ANDROID_SDK_ROOT` | `fx-audit-android-emulator` | Android SDK location (default: `~/.mozbuild/android-sdk-linux`) |
+| `ANDROID_AVD_HOME` | `fx-audit-android-emulator` | AVD directory (default: mach bootstrap's `~/.mozbuild/android-device/avd`) |
 
 ## Crash Detection
 
