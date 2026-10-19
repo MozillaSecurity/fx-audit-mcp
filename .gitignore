@@ -38,3 +38,6 @@ Thumbs.db
 # Coding Agents
 .codex
 .claude/
+
+# test fixtures live under a *.so-named directory; the *.so rule above must not hide them
+!tests/fixtures/symbols/**

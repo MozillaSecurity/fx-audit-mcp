@@ -1,0 +1,10 @@
+MODULE Linux x86_64 6AADD6A11EFAEEF4DBE2970B48932BE00 libxul.so
+FILE 0 netwerk/base/CrashChannel.cpp
+FILE 1 netwerk/base/nsBaseChannel.cpp
+FUNC 15f22000 100 0 CrashChannel::OpenContentStream(bool, nsIInputStream**, nsIChannel**)
+15f22000 3e 40 0
+15f2203e 10 42 0
+FUNC m 8616900 200 0 nsBaseChannel::BeginPumpingData()
+8616900 200 900 1
+FUNC 861c400 100 0 nsBaseChannel::AsyncOpen(nsIStreamListener*)
+PUBLIC a61d000 0 nsURILoader::OpenURI(nsIChannel*, unsigned int, nsIInterfaceRequestor*)
