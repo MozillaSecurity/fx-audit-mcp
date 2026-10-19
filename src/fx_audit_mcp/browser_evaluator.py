@@ -9,7 +9,7 @@ import tempfile
 from logging import ERROR, getLogger
 from pathlib import Path
 from shutil import copytree
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from FTB.Signatures.CrashSignature import CrashSignature
 from grizzly.common.storage import TestCase
@@ -26,6 +26,18 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from grizzly.common.report import Report
+
+
+class ProcessFlags(TypedDict, total=False):
+    """The BrowserCrashInfo process attribution fields."""
+
+    crashed_parent: bool | None
+    crashed_content: bool | None
+    crashed_gpu: bool | None
+    crashed_rdd: bool | None
+    crashed_gmp: bool | None
+    crashed_socket: bool | None
+    crashed_utility: bool | None
 
 
 IGNORED_SIGNATURES_DIR = Path(__file__).parent / "ignored_signatures"
@@ -160,7 +172,7 @@ def _extract_child_ptypes(log_paths: list[str]) -> dict[int, str]:
 
 def _crashed_process_fields(
     log_paths: CrashLogPaths, parent_pid: int | None
-) -> dict[str, bool | None]:
+) -> ProcessFlags:
     """Determine which process a crash occurred in.
 
     Args:
@@ -181,7 +193,10 @@ def _crashed_process_fields(
     """
     crash_pids = _extract_crash_pids(log_paths.crashdata)
     if not crash_pids:
-        return dict.fromkeys(("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), None)
+        return cast(
+            "ProcessFlags",
+            dict.fromkeys(("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), None),
+        )
 
     pfields: dict[str, bool | None] = dict.fromkeys(
         ("crashed_parent", *_PTYPE_TO_FIELD_MAP.values()), False
@@ -210,7 +225,7 @@ def _crashed_process_fields(
         for pfield_name in _PTYPE_TO_FIELD_MAP.values():
             pfields[pfield_name] = pfields[pfield_name] or None
 
-    return pfields
+    return cast("ProcessFlags", pfields)
 
 
 def _load_ignored_signatures() -> list[CrashSignature]:

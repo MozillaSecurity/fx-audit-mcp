@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "fastmcp>=3.0.0",
     "fuzzmanager>=0.9.1",
+    "fxpoppet>=0.4.1",
     "grizzly-framework>=1.3.0",
     "prefpicker>=2.25.0",
     "pydantic>=2.7",
@@ -41,6 +42,8 @@ dev = [
 [project.scripts]
 fx-audit-mcp = "fx_audit_mcp.mcp_server:main"
 fx-audit-build-firefox = "fx_audit_mcp.build_firefox:main"
+fx-audit-android-emulator = "fx_audit_mcp.android_emulator:main"
+fx-audit-asan-symbolize = "fx_audit_mcp.asan_symbolize:main"
 
 [project.urls]
 Homepage = "https://github.com/MozillaSecurity/fx-audit-mcp"
