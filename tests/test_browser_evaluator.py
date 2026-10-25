@@ -151,36 +151,36 @@ def test_hang_flag_records_only_a_busy_hang(
 
 
 class TestCheckPrefBlocklist:
-    @staticmethod
-    def _write_prefs(tmp_path: Path, names: list[str]) -> Path:
-        prefs_path = tmp_path / "prefs.js"
-        lines = ["// Generated with PrefPicker"]
-        lines += [f'user_pref("{name}", false);' for name in names]
-        prefs_path.write_text("\n".join(lines) + "\n")
-        return prefs_path
-
-    def test_no_match_returns_none(self, tmp_path: Path) -> None:
-        """No exception when no blocklisted pref is present."""
-        prefs_path = self._write_prefs(tmp_path, ["dom.workers.enabled"])
-        assert _check_pref_blocklist(prefs_path, ["security.foo"]) is None
-
-    def test_single_match_raises(self, tmp_path: Path) -> None:
-        """A present blocklisted pref raises ValueError naming it."""
-        prefs_path = self._write_prefs(tmp_path, ["dom.workers.enabled"])
-        with pytest.raises(ValueError, match="Blocked prefs detected"):
-            _check_pref_blocklist(prefs_path, ["dom.workers.enabled"])
-
-    def test_multiple_matches_report_each(self, tmp_path: Path) -> None:
-        """Every matched pref is named in the raised message."""
-        prefs_path = self._write_prefs(
-            tmp_path, ["dom.workers.enabled", "geo.enabled", "media.gmp.enabled"]
+    def test_no_match_returns_none(self) -> None:
+        """No exception when no blocklisted pref is supplied."""
+        assert (
+            _check_pref_blocklist({"dom.workers.enabled": False}, ["security.foo"])
+            is None
         )
+
+    def test_absent_prefs_pass(self) -> None:
+        """A call without custom prefs has nothing to check."""
+        assert _check_pref_blocklist(None, ["dom.workers.enabled"]) is None
+
+    def test_single_match_raises(self) -> None:
+        """A supplied blocklisted pref raises ValueError naming it."""
+        with pytest.raises(ValueError, match="Blocked prefs detected"):
+            _check_pref_blocklist(
+                {"dom.workers.enabled": False}, ["dom.workers.enabled"]
+            )
+
+    def test_multiple_matches_report_each(self) -> None:
+        """Every matched pref is named in the raised message."""
+        prefs = {
+            "dom.workers.enabled": False,
+            "geo.enabled": False,
+            "media.gmp.enabled": 1,
+        }
         with pytest.raises(ValueError) as exc_info:
-            _check_pref_blocklist(prefs_path, ["dom.workers.enabled", "geo.enabled"])
+            _check_pref_blocklist(prefs, ["dom.workers.enabled", "geo.enabled"])
         message = str(exc_info.value)
         assert "dom.workers.enabled" in message
         assert "geo.enabled" in message
-        assert "media.gmp.enabled" not in message
 
 
 class TestLoadPrefBlocklist:
@@ -382,6 +382,24 @@ class TestBuildTestcase:
 
 
 class TestPackageTestcase:
+    def test_blocked_pref_rejects_before_packaging(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blocklisted pref is refused even though only the template sets it."""
+        tc_dir = tmp_path / "testcase"
+        tc_dir.mkdir()
+        (tc_dir / "test.html").write_text("<html></html>")
+        blocklist = tmp_path / "blocklist.txt"
+        blocklist.write_text("services.settings.server\n")
+        monkeypatch.setenv(PREF_BLOCKLIST_ENV, str(blocklist))
+
+        with pytest.raises(ValueError, match=r"services\.settings\.server"):
+            asyncio.run(
+                package_testcase(
+                    tc_dir, "test.html", prefs={"services.settings.server": "data:,x"}
+                )
+            )
+
     def test_packages_files_prefs_and_env(self, tmp_path: Path) -> None:
         """Package a multi-file testcase with custom prefs and env vars."""
         tc_dir = tmp_path / "testcase"

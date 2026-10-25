@@ -23,7 +23,7 @@ from .logs import LOG_DIR_PREFIX
 from .models import BrowserCrashInfo, CrashLogPaths
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from grizzly.common.report import Report
 
@@ -37,7 +37,6 @@ PREF_BLOCKLIST_ENV = "FIREFOX_PREF_BLOCKLIST"
 # grizzly's own, what FirefoxTarget.handle_hang tests against.
 _IDLE_THRESHOLD = 15
 
-_USER_PREF_RE = re.compile(r'user_pref\(\s*"([^"]+)"')
 _ASAN_PID_RE = re.compile(r"==(\d+)==ERROR:")
 _CHILD_LAUNCH_RE = re.compile(
     r"\+\+PROCESS \[pid = (\d+)\] \[childID = \d+\] \[type = (.*)\]"
@@ -228,27 +227,26 @@ def _load_ignored_signatures() -> list[CrashSignature]:
     ]
 
 
-def _check_pref_blocklist(prefs_path: Path, pref_blocklist: list[str]) -> None:
-    """Raise if any blocklisted pref name appears in the generated prefs.js.
+def _check_pref_blocklist(
+    prefs: Mapping[str, object] | None, pref_blocklist: list[str]
+) -> None:
+    """Raise if any caller-supplied pref name is blocklisted.
 
+    Only the prefs layered on top of the prefpicker template are checked, not
+    the template itself: the template is the harness's own baseline and sets
+    prefs (``services.settings.server``, ``fuzzing.enabled``, ...) that a
+    testcase must still be forbidden from setting to a value of its choosing.
     Matching is by pref name only (value-independent). All matched prefs are
     named in the raised error message.
 
     Args:
-        prefs_path: Path to the generated prefs.js to inspect.
-        pref_blocklist: Pref names that must not appear in prefs.js.
+        prefs: Custom prefs the caller asked to set, or None.
+        pref_blocklist: Pref names that must not be set.
 
     Raises:
         ValueError: If one or more blocklisted pref names are present.
     """
-    blocked = set(pref_blocklist)
-    present = {
-        m.group(1)
-        for line in prefs_path.read_text(encoding="utf-8").splitlines()
-        for m in (_USER_PREF_RE.match(line.strip()),)
-        if m
-    }
-    matched = sorted(present & blocked)
+    matched = sorted(set(prefs or ()) & set(pref_blocklist))
     if matched:
         message = f"Blocked prefs detected: {', '.join(matched)}"
         raise ValueError(message)
@@ -387,6 +385,7 @@ async def package_testcase(
                 required=is_entry,
             )
 
+        _check_pref_blocklist(prefs, _load_pref_blocklist())
         assets_dir = Path(tempfile.mkdtemp(prefix="fx_audit_assets_"))
         prefs_path = assets_dir / "prefs.js"
         template = PrefPicker.lookup_template("browser-fuzzing.yml")
@@ -505,6 +504,7 @@ async def browser_evaluator(  # pragma: no cover
     # Always generate prefs.js from the prefpicker template, plus any
     # user-supplied custom prefs on top. These are set on the target profile
     # (not the testcase) so they don't appear in testcase dump output.
+    _check_pref_blocklist(prefs, _load_pref_blocklist())
     with tempfile.TemporaryDirectory(prefix="fx_audit_prefs_") as prefs_dir:
         prefs_path = Path(prefs_dir) / "prefs.js"
         template = PrefPicker.lookup_template("browser-fuzzing.yml")
@@ -514,7 +514,6 @@ async def browser_evaluator(  # pragma: no cover
             variant="code-review",
             additional_prefs=prefs,
         )
-        _check_pref_blocklist(prefs_path, _load_pref_blocklist())
         target.asset_mgr.add("prefs", prefs_path)
 
     # Process assets (prefs, etc.) - required for Firefox to launch properly
