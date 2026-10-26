@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.1.3 (2026-10-26)
+
+### Bug Fixes
+
+- Check the pref blocklist against the testcase's prefs only
+  ([#35](https://github.com/MozillaSecurity/fx-audit-mcp/pull/35),
+  [`29a1dfb`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/29a1dfb0a6b378f8a6532b5c48b8adc0d90d00ca))
+
+
 ## v4.1.2 (2026-10-08)
 
 ### Bug Fixes
