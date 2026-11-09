@@ -12,6 +12,7 @@ from pytest_mock import MockerFixture
 
 from fx_audit_mcp.build_firefox import (
     _get_build_dir,
+    _mach_python,
     _parse_args,
     _windows_build_env,
     build_firefox,
@@ -201,6 +202,31 @@ async def test_missing_python3(
         await build_firefox(firefox_dir, mozconfig)
 
     assert which.call_args.kwargs["path"] == environ.get("PATH", os.defpath)
+
+
+def test_mach_python_skips_own_virtualenv(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    """Own venv is skipped and VIRTUAL_ENV removed."""
+    venv_bin = tmp_path / "venv" / "bin"
+    other_venv_bin = tmp_path / "other" / "bin"
+    system_bin = tmp_path / "usr" / "bin"
+    for d in (venv_bin, other_venv_bin, system_bin):
+        d.mkdir(parents=True)
+    mocker.patch.object(sys, "prefix", str(tmp_path / "venv"))
+    mocker.patch.object(sys, "platform", "linux")
+    which = mocker.patch(
+        "fx_audit_mcp.build_firefox.which", return_value=str(system_bin / "python3")
+    )
+    env = {
+        "PATH": os.pathsep.join([str(venv_bin), str(other_venv_bin), str(system_bin)]),
+        "VIRTUAL_ENV": str(tmp_path / "other"),
+    }
+
+    assert _mach_python(env) == str(system_bin / "python3")
+
+    assert which.call_args.kwargs["path"] == str(system_bin)
+    assert "VIRTUAL_ENV" not in env
 
 
 @pytest.mark.anyio

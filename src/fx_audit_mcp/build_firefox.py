@@ -21,6 +21,39 @@ PROCESS_TERMINATION_TIMEOUT = 5.0
 MOZILLA_BUILD_ROOT = Path("C:/mozilla-build")
 
 
+def _mach_python(env: dict[str, str]) -> str:
+    """Find the python3 mach was bootstrapped with, skipping our own venv.
+
+    Mach rebuilds its virtualenv when run under a different interpreter, which
+    fails with EXDEV in layered images (bug 2087778). Removes ``VIRTUAL_ENV``
+    from ``env``.
+
+    Args:
+        env: Environment for the mach subprocess; modified in place.
+
+    Returns:
+        Path to the python3 executable.
+
+    Raises:
+        FileNotFoundError: If no ``python3`` is left on PATH.
+    """
+    bin_name = "Scripts" if sys.platform == "win32" else "bin"
+    own_bins = {os.path.normcase(os.path.realpath(Path(sys.prefix) / bin_name))}
+    virtual_env = env.pop("VIRTUAL_ENV", None)
+    if virtual_env:
+        own_bins.add(os.path.normcase(os.path.realpath(Path(virtual_env) / bin_name)))
+
+    path = os.pathsep.join(
+        entry
+        for entry in env.get("PATH", os.defpath).split(os.pathsep)
+        if os.path.normcase(os.path.realpath(entry)) not in own_bins
+    )
+    py3 = which("python3", path=path)
+    if not py3:
+        raise FileNotFoundError("Couldn't find python3 executable in PATH")
+    return py3
+
+
 def _windows_build_env(env: dict[str, str]) -> dict[str, str]:
     """Prepend Windows PATH entries needed by ``mach build``.
 
@@ -158,9 +191,7 @@ async def build_firefox(
     if sys.platform == "win32":
         _windows_build_env(env)
 
-    py3 = which("python3", path=env.get("PATH", os.defpath))
-    if not py3:
-        raise FileNotFoundError("Couldn't find python3 executable in PATH")
+    py3 = _mach_python(env)
 
     build_dir = await _get_build_dir(py3, firefox_dir, env)
 
