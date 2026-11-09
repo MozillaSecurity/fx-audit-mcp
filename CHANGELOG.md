@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v4.1.4 (2026-11-09)
+
+### Bug Fixes
+
+- Run mach with the python3 it was bootstrapped with
+  ([`7bc508e`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/7bc508e87810894d74a4048aa080b71db2e5b3f6))
+
+
 ## v4.1.3 (2026-10-26)
 
 ### Bug Fixes
