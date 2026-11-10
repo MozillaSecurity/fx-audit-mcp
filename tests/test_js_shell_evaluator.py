@@ -264,3 +264,35 @@ async def test_disallowed_asan_option_is_refused_before_running(
     with pytest.raises(ValueError, match="not allowed"):
         await js_shell_evaluator("x", js_binary, asan_options={"halt_on_error": 0})
     run.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_ubsan_options_reach_the_shell_environment(
+    mocker: MockerFixture,
+    make_run_result: MakeRunResult,
+    js_binary: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unwinder option is set for the run without touching ASAN_OPTIONS."""
+    monkeypatch.setenv("UBSAN_OPTIONS", "print_stacktrace=1")
+    run = mocker.patch(RUN, AsyncMock(return_value=make_run_result()))
+
+    await js_shell_evaluator("x", js_binary, ubsan_options={"fast_unwind_on_fatal": 1})
+
+    extra_env = run.call_args.kwargs["extra_env"]
+    assert set(extra_env) == {"UBSAN_OPTIONS"}
+    assert set(extra_env["UBSAN_OPTIONS"].split(":")) == {
+        "print_stacktrace=1",
+        "fast_unwind_on_fatal=1",
+    }
+
+
+@pytest.mark.anyio
+async def test_disallowed_ubsan_option_is_refused_before_running(
+    mocker: MockerFixture, make_run_result: MakeRunResult, js_binary: Path
+) -> None:
+    """A reporting option in UBSAN_OPTIONS never starts the shell."""
+    run = mocker.patch(RUN, AsyncMock(return_value=make_run_result()))
+    with pytest.raises(ValueError, match="not allowed"):
+        await js_shell_evaluator("x", js_binary, ubsan_options={"halt_on_error": 0})
+    run.assert_not_called()

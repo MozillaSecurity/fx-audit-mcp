@@ -1,8 +1,13 @@
-"""Tests for the allowlisted ASAN_OPTIONS merge."""
+"""Tests for the allowlisted ASAN_OPTIONS and UBSAN_OPTIONS merges."""
 
 import pytest
 
-from fx_audit_mcp.sanitizer_options import ALLOWED_ASAN_OPTIONS, asan_options_env
+from fx_audit_mcp.sanitizer_options import (
+    ALLOWED_ASAN_OPTIONS,
+    ALLOWED_UBSAN_OPTIONS,
+    asan_options_env,
+    ubsan_options_env,
+)
 
 
 def test_no_options_leaves_the_environment_alone() -> None:
@@ -38,3 +43,20 @@ def test_malformed_values_are_rejected(value: str) -> None:
     """A path, a separator or an empty value never reaches the option string."""
     with pytest.raises(ValueError, match="malformed value"):
         asan_options_env({"redzone": value})
+
+
+def test_ubsan_unwinder_option_is_merged_over_existing() -> None:
+    """The unwinder option joins the UBSAN_OPTIONS already in force."""
+    merged = ubsan_options_env({"fast_unwind_on_fatal": True}, "print_stacktrace=1")
+    assert merged is not None
+    assert set(merged.split(":")) == {"print_stacktrace=1", "fast_unwind_on_fatal=1"}
+
+
+@pytest.mark.parametrize(
+    "option", ["log_path", "halt_on_error", "handle_segv", "quarantine_size_mb"]
+)
+def test_ubsan_options_beyond_the_unwinder_are_rejected(option: str) -> None:
+    """Reporting options, and the ASAN allowlist, do not carry over to UBSAN."""
+    assert option not in ALLOWED_UBSAN_OPTIONS
+    with pytest.raises(ValueError, match=f"UBSAN options not allowed: {option}"):
+        ubsan_options_env({option: "1"})

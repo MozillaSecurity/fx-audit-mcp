@@ -453,6 +453,21 @@ class TestPackageTestcase:
             "quarantine_size_mb=0",
         }
 
+    def test_ubsan_options_are_recorded_as_env(self, tmp_path: Path) -> None:
+        """The UBSAN unwinder option lands on the bundle as UBSAN_OPTIONS."""
+        tc_dir = tmp_path / "testcase"
+        tc_dir.mkdir()
+        (tc_dir / "test.html").write_text("<html></html>")
+
+        output = asyncio.run(
+            package_testcase(
+                tc_dir, "test.html", ubsan_options={"fast_unwind_on_fatal": 1}
+            )
+        )
+
+        info = json.loads((Path(output) / "test_info.json").read_text())
+        assert info["env"] == {"UBSAN_OPTIONS": "fast_unwind_on_fatal=1"}
+
     def test_template_prefs_without_custom(self, tmp_path: Path) -> None:
         """Template prefs are included even when no custom prefs are given."""
         tc_dir = tmp_path / "testcase"

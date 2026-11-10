@@ -18,7 +18,7 @@ src/fx_audit_mcp/          # Main package
   logs.py                      # Write captured subprocess output to a log dir
   process_output.py            # Stream subprocess stdout/stderr concurrently
   process_runner.py            # Run a subprocess with output written straight to log files
-  sanitizer_options.py         # Allowlisted ASAN_OPTIONS callers may apply to a run
+  sanitizer_options.py         # Allowlisted ASAN_OPTIONS / UBSAN_OPTIONS callers may apply to a run
   ignored_signatures/          # FuzzManager crash signatures to suppress
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
@@ -98,6 +98,13 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   what is reported, how the process ends, or where the report goes (ffpuppet
   owns `log_path`) is rejected, so a caller can make a freed chunk reclaimable
   but cannot make a crash disappear.
+- The same three take `ubsan_options`, merged over `UBSAN_OPTIONS` the same
+  way. `sanitizer_options.ALLOWED_UBSAN_OPTIONS` holds one option,
+  `fast_unwind_on_fatal`: on a build whose only sanitizer runtime is UBSan's
+  (libFuzzer without ASan) a crash is an `UndefinedBehaviorSanitizer: SEGV`
+  report, and the default unwinder can fault on an unmapped program counter
+  and end that report after its header. Both parameters default to unset and
+  then leave the environment untouched.
 - Don't introduce thin private wrappers around a public function (or vice
   versa) when one call site does all the work — inline.
 
