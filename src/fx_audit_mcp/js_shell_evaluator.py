@@ -1,11 +1,13 @@
 """Evaluate testcase tool for testing vulnerabilities in the SpiderMonkey JS shell."""
 
+import os
 import tempfile
 from pathlib import Path
 
 from .logs import log_contains
 from .models import JSShellCrashInfo
 from .process_runner import run
+from .sanitizer_options import asan_options_env
 
 # Windows has no signals to report: an unhandled exception becomes the
 # process's exit code as an NTSTATUS value, and 0xC0000000 opens the range
@@ -24,6 +26,7 @@ async def js_shell_evaluator(
     js_binary: Path,
     timeout: int = 30,
     flags: list[str] | None = None,
+    asan_options: dict[str, str | int | bool] | None = None,
 ) -> JSShellCrashInfo:
     """Run a JS testcase in the SpiderMonkey shell and report whether it crashed.
 
@@ -40,6 +43,10 @@ async def js_shell_evaluator(
         timeout: Per-run timeout in seconds before the shell is killed.
         flags: Optional additional runtime flags for the JS shell (e.g.
             ``["--no-jit", "--baseline-eager"]``).
+        asan_options: Optional AddressSanitizer runtime options applied on top
+            of the environment's, as ``{"option": value}``; only
+            allocator-shaping options are accepted (the same set as
+            ``browser_evaluator``, e.g. ``{"quarantine_size_mb": 0}``).
 
     Returns:
         JSShellCrashInfo with:
@@ -47,9 +54,14 @@ async def js_shell_evaluator(
         - timed_out: Boolean indicating if the testcase timed out.
         - exit_code: The shell's exit status.
         - logs: Paths to the run's stdout/stderr/crashdata log files.
+
+    Raises:
+        ValueError: An ASAN option is not allowed or malformed.
     """
     if not js_binary.exists():
         raise FileNotFoundError(f"JS shell binary not found at {js_binary}")
+    asan_env = asan_options_env(asan_options, os.environ.get("ASAN_OPTIONS"))
+    extra_env = {"ASAN_OPTIONS": asan_env} if asan_env is not None else None
 
     with tempfile.TemporaryDirectory(prefix="fx_audit_js_") as tmp_dir:
         testcase_path = Path(tmp_dir) / "testcase.js"
@@ -61,6 +73,7 @@ async def js_shell_evaluator(
             *(flags or []),
             str(testcase_path),
             timeout=timeout,
+            extra_env=extra_env,
         )
 
     # Detect crash: died on a fault the OS reported, or ASAN/UBSAN in stderr.

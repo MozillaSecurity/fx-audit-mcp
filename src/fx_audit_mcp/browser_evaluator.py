@@ -21,6 +21,7 @@ from sapphire import Sapphire
 
 from .logs import LOG_DIR_PREFIX
 from .models import BrowserCrashInfo, CrashLogPaths
+from .sanitizer_options import asan_options_env
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -346,6 +347,7 @@ async def package_testcase(
     entry_point: str,
     prefs: dict[str, str | int | bool] | None = None,
     env: dict[str, str] | None = None,
+    asan_options: dict[str, str | int | bool] | None = None,
 ) -> str:
     """Bundle a Firefox crash reproducer directory (HTML/JS files plus prefs
     and env) into a replayable grizzly TestCase suitable for browser_evaluator
@@ -363,10 +365,21 @@ async def package_testcase(
             prefpicker template (e.g. ``{"dom.workers.enabled": False}``).
         env: Optional environment variables to record on the bundled testcase
             (e.g. ``{"MOZ_LOG": "ConsoleAPI:5"}``).
+        asan_options: Optional AddressSanitizer runtime options the
+            reproduction needs (e.g. ``{"quarantine_size_mb": 0}``), recorded
+            on the bundle as ``ASAN_OPTIONS``. Only allocator-shaping options
+            are accepted; see ``browser_evaluator``.
 
     Returns:
         Path to the bundled grizzly testcase directory.
+
+    Raises:
+        ValueError: An ASAN option is not allowed or malformed.
     """
+    env = dict(env or {})
+    asan_env = asan_options_env(asan_options, env.get("ASAN_OPTIONS"))
+    if asan_env is not None:
+        env["ASAN_OPTIONS"] = asan_env
     testcase = TestCase(
         entry_point=entry_point,
         adapter_name="fx-audit",
@@ -416,6 +429,7 @@ async def browser_evaluator(  # pragma: no cover
     timeout: int = 30,
     prefs: dict[str, str | int | bool] | None = None,
     enable_sandbox: bool = False,
+    asan_options: dict[str, str | int | bool] | None = None,
 ) -> BrowserCrashInfo:
     """Reproduce a Firefox crash by running an HTML/JS testcase under
     ASAN-instrumented Firefox and reporting any crash detected.
@@ -467,6 +481,16 @@ async def browser_evaluator(  # pragma: no cover
             disables sandboxing so the browser behaves like other fuzzing and
             replay runs. Enabling the sandbox can interfere with crash log
             creation, so crashes may be missed.
+        asan_options: Optional AddressSanitizer runtime options applied on top
+            of the harness defaults, as ``{"option": value}``. Only options
+            that shape the allocator are accepted: ``quarantine_size_mb``,
+            ``thread_local_quarantine_size_kb``, ``malloc_fill_byte``,
+            ``free_fill_byte``, ``max_malloc_fill_size``,
+            ``max_free_fill_size``, ``detect_stack_use_after_return``,
+            ``redzone``, ``max_redzone``. ``{"quarantine_size_mb": 0}`` lets a
+            freed chunk be reclaimed at once, which is what turning a
+            use-after-free into a controlled fault requires. Options that
+            change what is reported or how the process ends are rejected.
 
     Returns:
         BrowserCrashInfo with:
@@ -476,6 +500,9 @@ async def browser_evaluator(  # pragma: no cover
           crashed_gmp, crashed_socket, crashed_utility: which process type the
           crash was attributed to; None when attribution was unavailable.
         - logs: Paths to the run's stderr/stdout/crashdata log files.
+
+    Raises:
+        ValueError: An ASAN option is not allowed or malformed.
     """
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
@@ -500,6 +527,15 @@ async def browser_evaluator(  # pragma: no cover
 
     # Minimize log spam from mesa
     target.environ["EGL_LOG_LEVEL"] = "fatal"
+
+    # Caller options win for the keys they name; ffpuppet then fills in its
+    # own defaults around them and keeps log_path for itself.
+    asan_env = asan_options_env(
+        asan_options,
+        target.environ.get("ASAN_OPTIONS") or os.environ.get("ASAN_OPTIONS"),
+    )
+    if asan_env is not None:
+        target.environ["ASAN_OPTIONS"] = asan_env
 
     # Always generate prefs.js from the prefpicker template, plus any
     # user-supplied custom prefs on top. These are set on the target profile

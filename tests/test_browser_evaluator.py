@@ -432,6 +432,27 @@ class TestPackageTestcase:
         assert "dom.workers.enabled" in prefs_content
         assert "browser.backup.enabled" in prefs_content
 
+    def test_asan_options_are_recorded_as_env(self, tmp_path: Path) -> None:
+        """Allowed ASAN options land on the bundle as ASAN_OPTIONS."""
+        tc_dir = tmp_path / "testcase"
+        tc_dir.mkdir()
+        (tc_dir / "test.html").write_text("<html></html>")
+
+        output = asyncio.run(
+            package_testcase(
+                tc_dir,
+                "test.html",
+                env={"ASAN_OPTIONS": "detect_leaks=0"},
+                asan_options={"quarantine_size_mb": 0},
+            )
+        )
+
+        info = json.loads((Path(output) / "test_info.json").read_text())
+        assert set(info["env"]["ASAN_OPTIONS"].split(":")) == {
+            "detect_leaks=0",
+            "quarantine_size_mb=0",
+        }
+
     def test_template_prefs_without_custom(self, tmp_path: Path) -> None:
         """Template prefs are included even when no custom prefs are given."""
         tc_dir = tmp_path / "testcase"

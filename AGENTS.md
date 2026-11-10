@@ -18,6 +18,7 @@ src/fx_audit_mcp/          # Main package
   logs.py                      # Write captured subprocess output to a log dir
   process_output.py            # Stream subprocess stdout/stderr concurrently
   process_runner.py            # Run a subprocess with output written straight to log files
+  sanitizer_options.py         # Allowlisted ASAN_OPTIONS callers may apply to a run
   ignored_signatures/          # FuzzManager crash signatures to suppress
     shutdown_hang_abort.json
 tests/                         # Unit tests (mirrors src layout by tool file)
@@ -32,6 +33,7 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   test_nss_gtest_evaluator.py
   test_process_output.py
   test_process_runner.py
+  test_sanitizer_options.py
 ```
 
 ## Key Design Patterns
@@ -89,6 +91,13 @@ tests/                         # Unit tests (mirrors src layout by tool file)
   call time to suppress common noise crashes (e.g. shutdown hangs).
 - The execution tools (browser/JS shell/NSS gtest/Firefox/NSS build) are also
   exported from `fx_audit_mcp` for direct use (e.g. as pydantic-ai tools).
+- `browser_evaluator`, `js_shell_evaluator` and `package_testcase` take
+  `asan_options`, merged over the environment's `ASAN_OPTIONS` with the
+  caller's keys winning. Only the allocator-shaping options in
+  `sanitizer_options.ALLOWED_ASAN_OPTIONS` are accepted: anything that changes
+  what is reported, how the process ends, or where the report goes (ffpuppet
+  owns `log_path`) is rejected, so a caller can make a freed chunk reclaimable
+  but cannot make a crash disappear.
 - Don't introduce thin private wrappers around a public function (or vice
   versa) when one call site does all the work — inline.
 
