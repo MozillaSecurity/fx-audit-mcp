@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v4.2.0 (2026-11-10)
+
+### Features
+
+- Accept allowlisted ASAN_OPTIONS on the evaluators
+  ([#37](https://github.com/MozillaSecurity/fx-audit-mcp/pull/37),
+  [`22e3566`](https://github.com/MozillaSecurity/fx-audit-mcp/commit/22e3566887878de11e89f98c680c05227e52a6c6))
+
+
 ## v4.1.4 (2026-11-09)
 
 ### Bug Fixes
