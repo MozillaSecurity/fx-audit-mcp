@@ -7,7 +7,7 @@ from pathlib import Path
 from .logs import log_contains
 from .models import JSShellCrashInfo
 from .process_runner import run
-from .sanitizer_options import asan_options_env
+from .sanitizer_options import asan_options_env, ubsan_options_env
 
 # Windows has no signals to report: an unhandled exception becomes the
 # process's exit code as an NTSTATUS value, and 0xC0000000 opens the range
@@ -27,6 +27,7 @@ async def js_shell_evaluator(
     timeout: int = 30,
     flags: list[str] | None = None,
     asan_options: dict[str, str | int | bool] | None = None,
+    ubsan_options: dict[str, str | int | bool] | None = None,
 ) -> JSShellCrashInfo:
     """Run a JS testcase in the SpiderMonkey shell and report whether it crashed.
 
@@ -47,6 +48,9 @@ async def js_shell_evaluator(
             of the environment's, as ``{"option": value}``; only
             allocator-shaping options are accepted (the same set as
             ``browser_evaluator``, e.g. ``{"quarantine_size_mb": 0}``).
+        ubsan_options: Optional UBSan runtime options applied on top of the
+            environment's, as ``{"option": value}``; only
+            ``fast_unwind_on_fatal`` is accepted (see ``browser_evaluator``).
 
     Returns:
         JSShellCrashInfo with:
@@ -56,12 +60,17 @@ async def js_shell_evaluator(
         - logs: Paths to the run's stdout/stderr/crashdata log files.
 
     Raises:
-        ValueError: An ASAN option is not allowed or malformed.
+        ValueError: An ASAN or UBSAN option is not allowed or malformed.
     """
     if not js_binary.exists():
         raise FileNotFoundError(f"JS shell binary not found at {js_binary}")
     asan_env = asan_options_env(asan_options, os.environ.get("ASAN_OPTIONS"))
-    extra_env = {"ASAN_OPTIONS": asan_env} if asan_env is not None else None
+    ubsan_env = ubsan_options_env(ubsan_options, os.environ.get("UBSAN_OPTIONS"))
+    extra_env = {
+        name: value
+        for name, value in (("ASAN_OPTIONS", asan_env), ("UBSAN_OPTIONS", ubsan_env))
+        if value is not None
+    } or None
 
     with tempfile.TemporaryDirectory(prefix="fx_audit_js_") as tmp_dir:
         testcase_path = Path(tmp_dir) / "testcase.js"

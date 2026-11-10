@@ -21,7 +21,7 @@ from sapphire import Sapphire
 
 from .logs import LOG_DIR_PREFIX
 from .models import BrowserCrashInfo, CrashLogPaths
-from .sanitizer_options import asan_options_env
+from .sanitizer_options import asan_options_env, ubsan_options_env
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -348,6 +348,7 @@ async def package_testcase(
     prefs: dict[str, str | int | bool] | None = None,
     env: dict[str, str] | None = None,
     asan_options: dict[str, str | int | bool] | None = None,
+    ubsan_options: dict[str, str | int | bool] | None = None,
 ) -> str:
     """Bundle a Firefox crash reproducer directory (HTML/JS files plus prefs
     and env) into a replayable grizzly TestCase suitable for browser_evaluator
@@ -369,17 +370,23 @@ async def package_testcase(
             reproduction needs (e.g. ``{"quarantine_size_mb": 0}``), recorded
             on the bundle as ``ASAN_OPTIONS``. Only allocator-shaping options
             are accepted; see ``browser_evaluator``.
+        ubsan_options: Optional UBSan runtime options the reproduction was
+            run with (``{"fast_unwind_on_fatal": 1}``), recorded on the
+            bundle as ``UBSAN_OPTIONS``; see ``browser_evaluator``.
 
     Returns:
         Path to the bundled grizzly testcase directory.
 
     Raises:
-        ValueError: An ASAN option is not allowed or malformed.
+        ValueError: An ASAN or UBSAN option is not allowed or malformed.
     """
     env = dict(env or {})
     asan_env = asan_options_env(asan_options, env.get("ASAN_OPTIONS"))
     if asan_env is not None:
         env["ASAN_OPTIONS"] = asan_env
+    ubsan_env = ubsan_options_env(ubsan_options, env.get("UBSAN_OPTIONS"))
+    if ubsan_env is not None:
+        env["UBSAN_OPTIONS"] = ubsan_env
     testcase = TestCase(
         entry_point=entry_point,
         adapter_name="fx-audit",
@@ -430,6 +437,7 @@ async def browser_evaluator(  # pragma: no cover
     prefs: dict[str, str | int | bool] | None = None,
     enable_sandbox: bool = False,
     asan_options: dict[str, str | int | bool] | None = None,
+    ubsan_options: dict[str, str | int | bool] | None = None,
 ) -> BrowserCrashInfo:
     """Reproduce a Firefox crash by running an HTML/JS testcase under
     ASAN-instrumented Firefox and reporting any crash detected.
@@ -491,6 +499,15 @@ async def browser_evaluator(  # pragma: no cover
             freed chunk be reclaimed at once, which is what turning a
             use-after-free into a controlled fault requires. Options that
             change what is reported or how the process ends are rejected.
+        ubsan_options: Optional UBSan runtime options applied on top of the
+            harness defaults, as ``{"option": value}``. Only
+            ``fast_unwind_on_fatal`` is accepted. It matters for a build
+            whose only sanitizer runtime is UBSan's (a libFuzzer build
+            without ASan), where a crash is reported as
+            ``UndefinedBehaviorSanitizer: SEGV``: the default unwinder can
+            fault when the program counter is not mapped, which ends the
+            report after its header line, and ``{"fast_unwind_on_fatal": 1}``
+            prints the frames.
 
     Returns:
         BrowserCrashInfo with:
@@ -502,7 +519,7 @@ async def browser_evaluator(  # pragma: no cover
         - logs: Paths to the run's stderr/stdout/crashdata log files.
 
     Raises:
-        ValueError: An ASAN option is not allowed or malformed.
+        ValueError: An ASAN or UBSAN option is not allowed or malformed.
     """
     if not firefox_binary.exists():
         raise FileNotFoundError(f"Firefox binary not found at {firefox_binary}")
@@ -536,6 +553,12 @@ async def browser_evaluator(  # pragma: no cover
     )
     if asan_env is not None:
         target.environ["ASAN_OPTIONS"] = asan_env
+    ubsan_env = ubsan_options_env(
+        ubsan_options,
+        target.environ.get("UBSAN_OPTIONS") or os.environ.get("UBSAN_OPTIONS"),
+    )
+    if ubsan_env is not None:
+        target.environ["UBSAN_OPTIONS"] = ubsan_env
 
     # Always generate prefs.js from the prefpicker template, plus any
     # user-supplied custom prefs on top. These are set on the target profile
